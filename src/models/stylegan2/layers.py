@@ -24,6 +24,34 @@ def equalized_lr_init(weight: Tensor, bias: Tensor, scale_weights=True,
     return scale
 
 
+class EqualLeakyReLU(nn.LeakyReLU):
+    def __init__(self, negative_slope=0.2, inplace=False, gain=math.sqrt(2)):
+        self.gain = gain
+        super(EqualLeakyReLU, self).__init__(negative_slope, inplace)
+
+    def forward(self, x):
+        if self.inplace:
+            x = x.mul_(self.gain)
+        else:
+            x = x * self.gain
+        return F.leaky_relu(x, self.negative_slope, self.inplace)
+
+
+class RandomGaussianNoise(nn.Module):
+    def __init__(self):
+        super(RandomGaussianNoise, self).__init__()
+        self.gain = nn.Parameter(torch.empty(1), requires_grad=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.zeros_(self.gain)
+
+    def forward(self, x):
+        N, C, H, W = x.shape
+        noise = x.new_empty(N, 1, H, W).normal_()
+        return x + noise * self.gain
+
+
 class EqualLinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True,
                  scale_weights=True, lr_mult=1.0):
@@ -73,8 +101,9 @@ class EqualConv2d(nn.Conv2d):
 
 class ModulatedConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
-                 padding=0, dilation=1, bias=True,
+                 padding=0, dilation=1, bias=True, demodulate=True,
                  scale_weights=True, lr_mult=1.0):
+        self.demodulate = demodulate
         self.scale_weights = scale_weights
         self.lr_mult = lr_mult
         self.w_mult = 1.0
@@ -93,8 +122,9 @@ class ModulatedConv2d(nn.Conv2d):
         s = style[:, None, :, None, None]  # NI -> NOIkk
         w = w * s
 
-        d = torch.rsqrt(w.pow(2).sum(dim=(2, 3, 4), keepdim=True) + 1e-8)
-        w = w * d
+        if self.demodulate:
+            d = torch.rsqrt(w.pow(2).sum(dim=(2, 3, 4), keepdim=True) + 1e-8)
+            w = w * d
 
         _, C1, _, Hk, Wk = w.shape
         w = w.view(N * C1, C0, Hk, Wk)
