@@ -52,6 +52,21 @@ class RandomGaussianNoise(nn.Module):
         return x + noise * self.gain
 
 
+class InputNoise(nn.Module):
+    def __init__(self, channels, size=4):
+        super(InputNoise, self).__init__()
+        self.weight = nn.Parameter(torch.empty(1, channels, size, size),
+                                   requires_grad=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.weight)
+
+    def forward(self, n):
+        x = self.weight.expand(n, -1, -1, -1)
+        return x
+
+
 class EqualLinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True,
                  scale_weights=True, lr_mult=1.0):
