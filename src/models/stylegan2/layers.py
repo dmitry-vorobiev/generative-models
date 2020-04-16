@@ -142,9 +142,9 @@ class ModulatedConv2d(nn.Conv2d):
             w = w * d
 
         _, C1, _, Hk, Wk = w.shape
-        w = w.view(N * C1, C0, Hk, Wk)
+        w = w.view(N*C1, C0, Hk, Wk)
 
-        x = x.view(1, -1, H0, W0)
+        x = x.view(1, N*C0, H0, W0)
         out = F.conv2d(x, w, None, self.stride, self.padding, self.dilation, groups=N)
         _, _, H1, W1 = out.shape
         out = out.view(N, C1, H1, W1)
