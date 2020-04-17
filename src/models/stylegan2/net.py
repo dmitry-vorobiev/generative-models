@@ -5,48 +5,32 @@ import torch.nn.functional as F
 
 from torch import nn
 
-from .layers import EqualLeakyReLU, EqualLinear, InputNoise, \
-    ModulatedConv2d, RandomGaussianNoise
+from .layers import Input, Layer, ToRGB, EqualLinear, EqualLeakyReLU, Normalize, EmbedLabels
 
 
-class ToRGB(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim):
-        super(ToRGB, self).__init__()
-        self.style = EqualLinear(style_dim, in_channels, bias=True)
-        nn.init.ones_(self.style.bias)
+class MappingNet(nn.Module):
+    def __init__(self, latent_dim=512, label_dim=0, out_dim=512,
+                 num_layers=8, fmaps=512, lr_mult=0.01, normalize=True):
+        super(MappingNet, self).__init__()
+        in_fmaps = latent_dim
+        self.embed_labels = None
 
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1,
-                                    stride=1, padding=0, demodulate=False)
+        if label_dim > 0:
+            self.embed_labels = EmbedLabels(label_dim, latent_dim)
+            in_fmaps = latent_dim * 2
 
-    def forward(self, x, w):
-        y = self.style(w)
-        x = self.conv(x, y)
-        return x
+        layers = [Normalize()] if normalize else []
+        features = [in_fmaps] + [fmaps] * (num_layers - 1) + [out_dim]
+        for i in range(num_layers):
+            layers += [EqualLinear(features[i], features[i + 1], lr_mult=lr_mult),
+                       EqualLeakyReLU(inplace=True)]
+        self.mapping = nn.Sequential(*layers)
 
-
-class Layer(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim, up=False):
-        super(Layer, self).__init__()
-        if up:
-            self.upscale = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        else:
-            self.upscale = None
-
-        self.style = EqualLinear(style_dim, in_channels, bias=True)
-        nn.init.ones_(self.style.bias)
-
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
-                                    stride=1, padding=1)
-        self.add_noise = RandomGaussianNoise()
-        self.act_fn = EqualLeakyReLU(inplace=True)
-
-    def forward(self, x, w):
-        if self.upscale:
-            x = self.upscale(x)
-        y = self.style(w)
-        x = self.conv(x, y)
-        x = self.act_fn(self.add_noise(x))
-        return x
+    def forward(self, z, y=None):
+        if self.embed_labels:
+            z = self.embed_labels(z, y)
+        z = self.mapping(z)
+        return z
 
 
 def upscale(x, factor):
@@ -80,23 +64,20 @@ class SynthesisNet(nn.Module):
                      Layer(out_ch, out_ch, style_dim)]
             outs += [ToRGB(out_ch, img_channels, style_dim)]
 
-        self.input = InputNoise(nf(1), size=4)
+        self.input = Input(nf(1), size=4)
         self.main = nn.ModuleList(main)
         self.outs = nn.ModuleList(outs)
 
     def forward(self, n):
         w = torch.rand(len(self.main) + 1, n, 512)
-        x = self.input(n).clone()
+        x = self.input(n)
         y = None
-
         for i, layer in enumerate(self.main):
             x = layer(x, w[i])
-
             if not i % 2:
-                out = self.outs[i // 2]
+                out = self.outs[i//2]
                 if not i:
-                    y = out(x, w[i + 1])
+                    y = out(x, w[i+1])
                 else:
                     y = upscale(y, 2) + out(x, w[i+1])
-
         return y

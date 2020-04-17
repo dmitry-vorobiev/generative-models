@@ -52,9 +52,9 @@ class RandomGaussianNoise(nn.Module):
         return x + noise * self.gain
 
 
-class InputNoise(nn.Module):
+class Input(nn.Module):
     def __init__(self, channels, size=4):
-        super(InputNoise, self).__init__()
+        super(Input, self).__init__()
         self.weight = nn.Parameter(torch.empty(1, channels, size, size),
                                    requires_grad=True)
         self.reset_parameters()
@@ -63,7 +63,7 @@ class InputNoise(nn.Module):
         nn.init.normal_(self.weight)
 
     def forward(self, n):
-        x = self.weight.expand(n, -1, -1, -1)
+        x = self.weight.repeat(n, 1, 1, 1)
         return x
 
 
@@ -160,3 +160,65 @@ class ModulatedConv2d(nn.Conv2d):
         if bias is not None:
             bias = bias * self.lr_mult
         return self.conv2d_forward(x, style, weight, bias)
+
+
+def style_transform(in_features, out_features):
+    lin = EqualLinear(in_features, out_features, bias=True)
+    nn.init.ones_(lin.bias)
+    return lin
+
+
+class ToRGB(nn.Module):
+    def __init__(self, in_channels, out_channels, style_dim):
+        super(ToRGB, self).__init__()
+        self.style = style_transform(style_dim, in_channels)
+        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1,
+                                    stride=1, padding=0, demodulate=False)
+
+    def forward(self, x, w):
+        y = self.style(w)
+        x = self.conv(x, y)
+        return x
+
+
+class Layer(nn.Module):
+    def __init__(self, in_channels, out_channels, style_dim, up=False):
+        super(Layer, self).__init__()
+        if up:
+            self.upscale = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        else:
+            self.upscale = None
+
+        self.style = style_transform(style_dim, in_channels)
+        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
+                                    stride=1, padding=1)
+        self.add_noise = RandomGaussianNoise()
+        self.act_fn = EqualLeakyReLU(inplace=True)
+
+    def forward(self, x, w):
+        if self.upscale:
+            x = self.upscale(x)
+        y = self.style(w)
+        x = self.conv(x, y)
+        x = self.act_fn(self.add_noise(x))
+        return x
+
+
+class Normalize(nn.Module):
+    def forward(self, x):
+        norm = torch.rsqrt(x.pow(2).mean(dim=1, keepdim=True) + 1e-8)
+        return x * norm
+
+
+class EmbedLabels(nn.Module):
+    def __init__(self, in_features, out_features):
+        super(EmbedLabels, self).__init__()
+        self.linear = nn.Linear(in_features, out_features, bias=False)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.linear.weight)
+
+    def forward(self, z, y):
+        y = self.linear(y)
+        return torch.cat([z, y], dim=1)
