@@ -1,16 +1,22 @@
 import math
 import numpy as np
+import random
 import torch
 import torch.nn.functional as F
 
-from torch import nn
+from torch import nn, Tensor
+from typing import Optional
 
 from .layers import Input, Layer, ToRGB, EqualLinear, EqualLeakyReLU, Normalize, EmbedLabels
 
+Latent = Tensor
+Label = Optional[Tensor]
+DLatent = Tensor
+
 
 class MappingNet(nn.Module):
-    def __init__(self, latent_dim=512, label_dim=0, out_dim=512,
-                 num_layers=8, fmaps=512, lr_mult=0.01, normalize=True):
+    def __init__(self, latent_dim=512, label_dim=0, style_dim=512,
+                 num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
         super(MappingNet, self).__init__()
         in_fmaps = latent_dim
         self.embed_labels = None
@@ -20,13 +26,13 @@ class MappingNet(nn.Module):
             in_fmaps = latent_dim * 2
 
         layers = [Normalize()] if normalize else []
-        features = [in_fmaps] + [fmaps] * (num_layers - 1) + [out_dim]
+        features = [in_fmaps] + [hidden_dim] * (num_layers - 1) + [style_dim]
         for i in range(num_layers):
             layers += [EqualLinear(features[i], features[i + 1], lr_mult=lr_mult),
                        EqualLeakyReLU(inplace=True)]
         self.mapping = nn.Sequential(*layers)
 
-    def forward(self, z, y=None):
+    def forward(self, z: Latent, y: Label = None):
         if self.embed_labels:
             z = self.embed_labels(z, y)
         z = self.mapping(z)
@@ -68,9 +74,12 @@ class SynthesisNet(nn.Module):
         self.main = nn.ModuleList(main)
         self.outs = nn.ModuleList(outs)
 
-    def forward(self, n):
-        w = torch.rand(len(self.main) + 1, n, 512)
-        x = self.input(n)
+    @property
+    def num_layers(self):
+        return len(self.main) + 1
+
+    def forward(self, w: DLatent):
+        x = self.input(w.size(1))
         y = None
         for i, layer in enumerate(self.main):
             x = layer(x, w[i])
@@ -81,3 +90,37 @@ class SynthesisNet(nn.Module):
                 else:
                     y = upscale(y, 2) + out(x, w[i+1])
         return y
+
+
+class Generator(nn.Module):
+    def __init__(self, mapping: MappingNet, synthesis: SynthesisNet, p_style_mix=0.9):
+        super(Generator, self).__init__()
+        self.mapping = mapping
+        self.synthesis = synthesis
+        self.p_style_mix = p_style_mix
+
+    @property
+    def num_layers(self):
+        return self.synthesis.num_layers
+
+    def mix_styles(self, z1: Tensor, y: Tensor, w1: Tensor):
+        num_layers = self.num_layers
+
+        if random.uniform(0, 1) < self.p_style_mix:
+            mix_cutoff = int(random.uniform(1, num_layers))
+        else:
+            mix_cutoff = num_layers
+
+        z2 = torch.randn_like(z1)
+        w2 = self.mapping(z2, y)
+        mask = torch.arange(num_layers)[:, None, None] < mix_cutoff
+        return torch.where(mask, w1, w2)
+
+    def forward(self, z, y=None):
+        w = self.mapping(z, y)
+        if w.ndim == 2:
+            w = w.expand(self.num_layers, -1, -1)
+        if self.p_style_mix is not None:
+            w = self.mix_styles(z, y, w)
+        out = self.synthesis(w)
+        return out
