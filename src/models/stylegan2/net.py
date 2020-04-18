@@ -14,6 +14,10 @@ Label = Optional[Tensor]
 DLatent = Tensor
 
 
+def upscale(x, factor):
+    return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
+
+
 class MappingNet(nn.Module):
     def __init__(self, latent_dim=512, label_dim=0, style_dim=512,
                  num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
@@ -37,10 +41,6 @@ class MappingNet(nn.Module):
             z = self.embed_labels(z, y)
         z = self.mapping(z)
         return z
-
-
-def upscale(x, factor):
-    return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
 
 
 class SynthesisNet(nn.Module):

@@ -5,6 +5,8 @@ import torch.nn.functional as F
 
 from torch import nn, Tensor
 
+from .ops import minibatch_stddev
+
 
 def equalized_lr_init(weight: Tensor, bias: Tensor, scale_weights=True,
                       lr_mult=1.0) -> float:
@@ -37,9 +39,9 @@ class EqualLeakyReLU(nn.LeakyReLU):
         return F.leaky_relu(x, self.negative_slope, self.inplace)
 
 
-class RandomGaussianNoise(nn.Module):
+class AddRandomNoise(nn.Module):
     def __init__(self):
-        super(RandomGaussianNoise, self).__init__()
+        super(AddRandomNoise, self).__init__()
         self.gain = nn.Parameter(torch.empty(1), requires_grad=True)
         self.reset_parameters()
 
@@ -192,7 +194,7 @@ class Layer(nn.Module):
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
                                     stride=1, padding=1)
-        self.add_noise = RandomGaussianNoise()
+        self.add_noise = AddRandomNoise()
         self.act_fn = EqualLeakyReLU(inplace=True)
 
     def forward(self, x, w):
@@ -222,3 +224,15 @@ class EmbedLabels(nn.Module):
     def forward(self, z, y):
         y = self.linear(y)
         return torch.cat([z, y], dim=1)
+
+
+class ConcatBatchStddev(nn.Module):
+    def __init__(self, group_size=4, num_new_features=1):
+        super(ConcatBatchStddev, self).__init__()
+        self.group_size = group_size
+        self.num_new_features = num_new_features
+
+    def forward(self, x: Tensor):
+        y = minibatch_stddev(x, group_size=self.group_size,
+                             num_new_features=self.num_new_features)
+        return torch.cat([x, y], dim=1)
