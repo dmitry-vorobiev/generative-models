@@ -171,9 +171,9 @@ class Normalize(nn.Module):
         return x * norm
 
 
-class EmbedLabels(nn.Module):
+class ConcatLabels(nn.Module):
     def __init__(self, in_features, out_features):
-        super(EmbedLabels, self).__init__()
+        super(ConcatLabels, self).__init__()
         self.linear = nn.Linear(in_features, out_features, bias=False)
         self.reset_parameters()
 

@@ -8,7 +8,7 @@ from torch import nn, Tensor
 from typing import Optional
 
 from .layers import AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, EqualLinear, \
-    EqualLeakyReLU, Flatten, ModulatedConv2d, Normalize, EmbedLabels
+    EqualLeakyReLU, Flatten, ModulatedConv2d, Normalize, ConcatLabels
 
 Latent = Tensor
 Label = Optional[Tensor]
@@ -44,7 +44,7 @@ class StyledLayer(nn.Module):
         self.add_noise = AddRandomNoise()
         self.act_fn = EqualLeakyReLU(inplace=True)
 
-    def forward(self, x, w):
+    def forward(self, x: Tensor, w: DLatent) -> Tensor:
         if self.upscale:
             x = self.upscale(x)
         y = self.style(w)
@@ -60,7 +60,7 @@ class ToRGB(nn.Module):
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1,
                                     stride=1, padding=0, demodulate=False)
 
-    def forward(self, x, w):
+    def forward(self, x: Tensor, w: DLatent) -> Tensor:
         y = self.style(w)
         x = self.conv(x, y)
         return x
@@ -73,7 +73,7 @@ class FromRGB(nn.Module):
                                 stride=1, padding=0, bias=True)
         self.act_fn = EqualLeakyReLU(inplace=True)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.act_fn(self.conv(x))
 
 
@@ -88,7 +88,7 @@ class ResidualBlock(nn.Module):
             EqualConv2d(in_channels, out_channels, kernel_size=1, bias=False),
             nn.AvgPool2d(2))
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         x = self.conv(x) + self.down(x)
         return x * (1 / math.sqrt(2))
 
@@ -97,11 +97,12 @@ class MappingNet(nn.Module):
     def __init__(self, latent_dim=512, label_dim=0, style_dim=512,
                  num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
         super(MappingNet, self).__init__()
+        self.style_dim = style_dim
+
         in_fmaps = latent_dim
         self.embed_labels = None
-
         if label_dim > 0:
-            self.embed_labels = EmbedLabels(label_dim, latent_dim)
+            self.embed_labels = ConcatLabels(label_dim, latent_dim)
             in_fmaps = latent_dim * 2
 
         layers = [Normalize()] if normalize else []
@@ -152,7 +153,7 @@ class SynthesisNet(nn.Module):
     def num_layers(self):
         return len(self.main) + 1
 
-    def forward(self, w: DLatent):
+    def forward(self, w: DLatent) -> Tensor:
         x = self.input(w.size(1))
         y = None
         for i, layer in enumerate(self.main):
@@ -167,17 +168,42 @@ class SynthesisNet(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, mapping: MappingNet, synthesis: SynthesisNet, p_style_mix=0.9):
+    def __init__(self, mapping: MappingNet, synthesis: SynthesisNet,
+                 p_style_mix=0.9, w_ema_decay=0.995,
+                 truncation_psi=0.5, truncation_cutoff=None,
+                 is_training=True):
         super(Generator, self).__init__()
+        if is_training:
+            if w_ema_decay >= 1.0 or w_ema_decay <= 0.0:
+                w_ema_decay = None
+            if p_style_mix <= 0.0:
+                p_style_mix = None
+            truncation_psi = None
+        else:
+            w_ema_decay = None
+            p_style_mix = None
+            if truncation_psi >= 1.0:
+                truncation_psi = None
+
         self.mapping = mapping
         self.synthesis = synthesis
         self.p_style_mix = p_style_mix
+
+        self.w_ema_decay = w_ema_decay
+        self.register_buffer('w_avg', torch.zeros(mapping.style_dim))
+
+        self.truncation_psi = truncation_psi
+        self.truncation_cutoff = truncation_cutoff
 
     @property
     def num_layers(self):
         return self.synthesis.num_layers
 
-    def mix_styles(self, z1: Tensor, y: Tensor, w1: Tensor):
+    def w_ema_step(self, w: Tensor):
+        with torch.no_grad():
+            self.w_avg = torch.lerp(w.mean(0), self.w_avg, self.w_ema_decay)
+
+    def mix_styles(self, z1: Latent, label: Label, w1: DLatent) -> DLatent:
         num_layers = self.num_layers
 
         if random.uniform(0, 1) < self.p_style_mix:
@@ -186,18 +212,33 @@ class Generator(nn.Module):
             mix_cutoff = num_layers
 
         z2 = torch.randn_like(z1)
-        w2 = self.mapping(z2, y)
-        mask = torch.arange(num_layers)[:, None, None] < mix_cutoff
+        w2 = self.mapping(z2, label)
+        mask = (torch.arange(num_layers) < mix_cutoff)[:, None, None]
         return torch.where(mask, w1, w2)
 
-    def forward(self, z, label=None):
+    def truncate(self, w: DLatent) -> DLatent:
+        assert w.ndim == 3, "w: layer axis is missing"
+        layer_psi = torch.ones(self.num_layers, device=w.device)
+        if self.truncation_cutoff is None:
+            layer_psi *= self.truncation_psi
+        else:
+            layer_idx = torch.arange(self.num_layers, device=w.device)
+            mask = layer_idx < self.truncation_cutoff
+            layer_psi = torch.where(mask, layer_psi * self.truncation_psi, layer_psi)
+        w = torch.lerp(self.w_avg[None, None, :], w, layer_psi[:, None, None])
+        return w
+
+    def forward(self, z: Latent, label: Label = None) -> Tensor:
         w = self.mapping(z, label)
-        if w.ndim == 2:
-            w = w.expand(self.num_layers, -1, -1)
-        if self.p_style_mix is not None:
+        if self.w_ema_decay:
+            self.w_ema_step(w)
+        # N, S -> L, N, S
+        w = w.expand(self.num_layers, -1, -1)
+        if self.p_style_mix:
             w = self.mix_styles(z, label, w)
-        out = self.synthesis(w)
-        return out
+        if self.truncation_psi:
+            w = self.truncate(w)
+        return self.synthesis(w)
 
 
 class Discriminator(nn.Module):
