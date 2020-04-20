@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from torch import nn, Tensor
+from typing import Any, Callable
 
 from .ops import minibatch_stddev
 
@@ -164,48 +165,6 @@ class ModulatedConv2d(nn.Conv2d):
         return self.conv2d_forward(x, style, weight, bias)
 
 
-def style_transform(in_features, out_features):
-    lin = EqualLinear(in_features, out_features, bias=True)
-    nn.init.ones_(lin.bias)
-    return lin
-
-
-class ToRGB(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim):
-        super(ToRGB, self).__init__()
-        self.style = style_transform(style_dim, in_channels)
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1,
-                                    stride=1, padding=0, demodulate=False)
-
-    def forward(self, x, w):
-        y = self.style(w)
-        x = self.conv(x, y)
-        return x
-
-
-class Layer(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim, up=False):
-        super(Layer, self).__init__()
-        if up:
-            self.upscale = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        else:
-            self.upscale = None
-
-        self.style = style_transform(style_dim, in_channels)
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
-                                    stride=1, padding=1)
-        self.add_noise = AddRandomNoise()
-        self.act_fn = EqualLeakyReLU(inplace=True)
-
-    def forward(self, x, w):
-        if self.upscale:
-            x = self.upscale(x)
-        y = self.style(w)
-        x = self.conv(x, y)
-        x = self.act_fn(self.add_noise(x))
-        return x
-
-
 class Normalize(nn.Module):
     def forward(self, x):
         norm = torch.rsqrt(x.pow(2).mean(dim=1, keepdim=True) + 1e-8)
@@ -226,9 +185,9 @@ class EmbedLabels(nn.Module):
         return torch.cat([z, y], dim=1)
 
 
-class ConcatBatchStddev(nn.Module):
+class ConcatMiniBatchStddev(nn.Module):
     def __init__(self, group_size=4, num_new_features=1):
-        super(ConcatBatchStddev, self).__init__()
+        super(ConcatMiniBatchStddev, self).__init__()
         self.group_size = group_size
         self.num_new_features = num_new_features
 
@@ -236,3 +195,17 @@ class ConcatBatchStddev(nn.Module):
         y = minibatch_stddev(x, group_size=self.group_size,
                              num_new_features=self.num_new_features)
         return torch.cat([x, y], dim=1)
+
+
+class Lambda(nn.Module):
+    def __init__(self, fn: Callable[[Any], Tensor]):
+        super(Lambda, self).__init__()
+        self.fn = fn
+
+    def forward(self, x: Tensor):
+        return self.fn(x)
+
+
+class Flatten(nn.Module):
+    def forward(self, x: Tensor):
+        return x.flatten(1)
