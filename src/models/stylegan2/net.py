@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from torch import nn, Tensor
-from typing import Optional
+from typing import Optional, Tuple
 
 from .layers import AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, EqualLinear, \
     EqualLeakyReLU, Flatten, ModulatedConv2d, Normalize, ConcatLabels
@@ -97,8 +97,6 @@ class MappingNet(nn.Module):
     def __init__(self, latent_dim=512, label_dim=0, style_dim=512,
                  num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
         super(MappingNet, self).__init__()
-        self.style_dim = style_dim
-
         in_fmaps = latent_dim
         self.embed_labels = None
         if label_dim > 0:
@@ -168,9 +166,10 @@ class SynthesisNet(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, mapping: MappingNet, synthesis: SynthesisNet,
-                 p_style_mix=0.9, w_ema_decay=0.995,
-                 truncation_psi=0.5, truncation_cutoff=None,
+    def __init__(self, img_res=1024, img_channels=3, latent_dim=512, label_dim=0, style_dim=512,
+                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
+                 num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
+                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None,
                  is_training=True):
         super(Generator, self).__init__()
         if is_training:
@@ -185,18 +184,26 @@ class Generator(nn.Module):
             if truncation_psi >= 1.0:
                 truncation_psi = None
 
-        self.mapping = mapping
-        self.synthesis = synthesis
+        self.latent_dim = latent_dim
+        self.label_dim = label_dim
+
+        self.mapping = MappingNet(
+            latent_dim, label_dim, style_dim, num_layers=num_mapping_layers,
+            hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize=normalize_latent)
+
+        self.synthesis = SynthesisNet(
+            img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max)
+
         self.p_style_mix = p_style_mix
 
         self.w_ema_decay = w_ema_decay
-        self.register_buffer('w_avg', torch.zeros(mapping.style_dim))
+        self.register_buffer('w_avg', torch.zeros(style_dim))
 
         self.truncation_psi = truncation_psi
         self.truncation_cutoff = truncation_cutoff
 
     @property
-    def num_layers(self):
+    def num_layers(self) -> int:
         return self.synthesis.num_layers
 
     def w_ema_step(self, w: Tensor):
@@ -228,7 +235,7 @@ class Generator(nn.Module):
         w = torch.lerp(self.w_avg[None, None, :], w, layer_psi[:, None, None])
         return w
 
-    def forward(self, z: Latent, label: Label = None) -> Tensor:
+    def forward(self, z: Latent, label: Label = None) -> Tuple[Tensor, Tensor]:
         w = self.mapping(z, label)
         if self.w_ema_decay:
             self.w_ema_step(w)
@@ -238,7 +245,7 @@ class Generator(nn.Module):
             w = self.mix_styles(z, label, w)
         if self.truncation_psi:
             w = self.truncate(w)
-        return self.synthesis(w)
+        return self.synthesis(w), w
 
 
 class Discriminator(nn.Module):
@@ -273,7 +280,7 @@ class Discriminator(nn.Module):
             out = [mbstd] + out
         self.layers = nn.Sequential(inp, *main, *out)
 
-    def forward(self, image: Tensor, label=None):
+    def forward(self, image: Tensor, label: Label = None) -> Tensor:
         x = self.layers(image)
         if label is not None:
             x = torch.sum(x * label, dim=1, keepdim=True)
