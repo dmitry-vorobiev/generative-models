@@ -169,20 +169,14 @@ class Generator(nn.Module):
     def __init__(self, img_res=1024, img_channels=3, latent_dim=512, label_dim=0, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
                  num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
-                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None,
-                 is_training=True):
+                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None):
         super(Generator, self).__init__()
-        if is_training:
-            if w_ema_decay >= 1.0 or w_ema_decay <= 0.0:
-                w_ema_decay = None
-            if p_style_mix <= 0.0:
-                p_style_mix = None
-            truncation_psi = None
-        else:
+        if w_ema_decay >= 1.0 or w_ema_decay <= 0.0:
             w_ema_decay = None
+        if p_style_mix <= 0.0:
             p_style_mix = None
-            if truncation_psi >= 1.0:
-                truncation_psi = None
+        if truncation_psi >= 1.0:
+            truncation_psi = None
 
         self.latent_dim = latent_dim
         self.label_dim = label_dim
@@ -212,7 +206,6 @@ class Generator(nn.Module):
 
     def mix_styles(self, z1: Latent, label: Label, w1: DLatent) -> DLatent:
         num_layers = self.num_layers
-
         if random.uniform(0, 1) < self.p_style_mix:
             mix_cutoff = int(random.uniform(1, num_layers))
         else:
@@ -224,7 +217,7 @@ class Generator(nn.Module):
         return torch.where(mask, w1, w2)
 
     def truncate(self, w: DLatent) -> DLatent:
-        assert w.ndim == 3, "w: layer axis is missing"
+        assert w.ndim == 2, "w: layer axis will be added by this op"
         layer_psi = torch.ones(self.num_layers, device=w.device)
         if self.truncation_cutoff is None:
             layer_psi *= self.truncation_psi
@@ -232,19 +225,23 @@ class Generator(nn.Module):
             layer_idx = torch.arange(self.num_layers, device=w.device)
             mask = layer_idx < self.truncation_cutoff
             layer_psi = torch.where(mask, layer_psi * self.truncation_psi, layer_psi)
-        w = torch.lerp(self.w_avg[None, None, :], w, layer_psi[:, None, None])
+        w = torch.lerp(self.w_avg[None, None, :], w[None, :], weight=layer_psi[:, None, None])
         return w
 
     def forward(self, z: Latent, label: Label = None) -> Tuple[Tensor, Tensor]:
         w = self.mapping(z, label)
-        if self.w_ema_decay:
-            self.w_ema_step(w)
-        # N, S -> L, N, S
-        w = w.expand(self.num_layers, -1, -1)
-        if self.p_style_mix:
-            w = self.mix_styles(z, label, w)
-        if self.truncation_psi:
-            w = self.truncate(w)
+
+        if self.training:
+            if self.w_ema_decay:
+                self.w_ema_step(w)
+            if self.p_style_mix:
+                w = self.mix_styles(z, label, w)
+        else:
+            if self.truncation_psi:
+                w = self.truncate(w)
+
+        if w.ndim == 2:
+            w = w.expand(self.num_layers, -1, -1)
         return self.synthesis(w), w
 
 

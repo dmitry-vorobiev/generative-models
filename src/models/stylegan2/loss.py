@@ -38,8 +38,7 @@ class D_LogisticLoss_R1(nn.Module):
 def path_length(fake_img: Tensor, fake_w: Tensor) -> Tensor:
     N, C, H, W = fake_img.shape
     noise = torch.randn_like(fake_img) / math.sqrt(H * W)
-    grad, = torch.autograd.grad(
-        (fake_img * noise).sum(), fake_w, retain_graph=True)
+    grad, = autograd.grad((fake_img * noise).sum(), fake_w, retain_graph=True)
     # fake_w: (L, N, S)
     return torch.sqrt(grad.pow(2).sum(dim=2, keepdim=True).mean(dim=0))
 
