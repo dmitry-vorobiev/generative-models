@@ -19,11 +19,8 @@ class D_LogisticLoss_R1(nn.Module):
         "Which Training Methods for GANs do actually Converge?", Mescheder et al. 2018
     """
 
-    def __init__(self, generator, discriminator, r1_freq=16, r1_gamma=10.0):
-        # type: (Generator, Discriminator, int, float) -> D_LogisticLoss_R1
+    def __init__(self, r1_freq=16, r1_gamma=10.0):
         super(D_LogisticLoss_R1, self).__init__()
-        self.generator = generator
-        self.discriminator = discriminator
         self.freq = r1_freq
         self.gamma = r1_gamma
         self.count = 0
@@ -35,14 +32,15 @@ class D_LogisticLoss_R1(nn.Module):
     def update_count(self) -> None:
         self.count = (self.count + 1) % self.freq
 
-    def forward(self, reals, z, label=None):
-        # type: (Tensor, Latent, Label) -> Tensor
+    def forward(self, G, D, reals, z, label=None):
+        # type: (Generator, Discriminator, Tensor, Latent, Label) -> Tensor
         if self.should_reg:
             reals.requires_grad_(True)
 
-        fakes, fake_w = self.generator(z, label)
-        real_score = self.discriminator(reals, label)
-        fake_score = self.discriminator(fakes, label)
+        fakes, fake_w = G(z, label)
+        real_score = D(reals, label)
+        fake_score = D(fakes, label)
+        # -log(1 - sigmoid(fake_score)) + -log(sigmoid(real_score))
         loss = F.softplus(fake_score) + F.softplus(-real_score)
 
         if self.should_reg:
@@ -77,12 +75,8 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
        "Analyzing and Improving the Image Quality of StyleGAN", Karras et al. 2019
     """
 
-    def __init__(self, generator, discriminator,
-                 pl_ema_decay=0.01, pl_reg_freq=4, pl_reg_weight=2.0):
-        # type: (Generator, Discriminator, float, int, float) -> G_LogisticNSLoss_PathLenReg
+    def __init__(self, pl_ema_decay=0.01, pl_reg_freq=4, pl_reg_weight=2.0):
         super(G_LogisticNSLoss_PathLenReg, self).__init__()
-        self.generator = generator
-        self.discriminator = discriminator
         self.decay = pl_ema_decay
         self.freq = pl_reg_freq
         self.weight = pl_reg_weight
@@ -97,11 +91,11 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
     def update_count(self) -> None:
         self.count = (self.count + 1) % self.freq
 
-    def forward(self, z, label=None):
-        # type: (Latent, Label) -> Tensor
-        fakes, w = self.generator(z, label)
-        fake_score = self.discriminator(fakes, label)
-        loss = F.softplus(-fake_score)
+    def forward(self, G, D, z, label=None):
+        # type: (Generator, Discriminator, Latent, Label) -> Tensor
+        fakes, w = G(z, label)
+        fake_score = D(fakes, label)
+        loss = F.softplus(-fake_score)  # -log(sigmoid(fake_score))
 
         if self.should_reg:
             penalty, self.pl_avg = path_len_penalty(fakes, w, self.pl_avg, self.decay)
