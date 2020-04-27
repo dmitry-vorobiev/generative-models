@@ -213,7 +213,8 @@ class Generator(nn.Module):
 
         z2 = torch.randn_like(z1)
         w2 = self.mapping(z2, label)
-        mask = (torch.arange(num_layers) < mix_cutoff)[:, None, None]
+        layer_idx = torch.arange(num_layers, device=z1.device)
+        mask = (layer_idx < mix_cutoff)[:, None, None]
         return torch.where(mask, w1, w2)
 
     def truncate(self, w: DLatent) -> DLatent:

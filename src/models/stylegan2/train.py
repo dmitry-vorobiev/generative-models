@@ -6,7 +6,7 @@ from torch.optim.optimizer import Optimizer
 from typing import Optional
 
 from .net import Discriminator, Generator
-from ..types import Batch, Device, DLossFunc, GLossFunc, TrainFunc
+from ..types import Batch, Device, DLossFunc, GLossFunc, TensorMap, TrainFunc
 
 
 def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=-1, device=None):
@@ -26,12 +26,11 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
             return None
         return F.one_hot(y, num_classes=num_classes)
 
-    def _loop(batch: Batch):
+    def _loop(image: Tensor, label=None) -> TensorMap:
         G.train()
         D.train()
 
-        real_image, real_label = batch
-        N = real_image.size(0)
+        N = image.size(0)
 
         # Training generator
         G.requires_grad_(True)
@@ -43,15 +42,20 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
         g_loss = G_loss_func(G, D, z, fake_label).mean()
         g_loss.backward()
         G_opt.step()
+        del z, fake_label
 
         # Training discriminator
         G.requires_grad_(False)
         D.requires_grad_(True)
         D_opt.zero_grad()
 
+        image = image.to(device)
+        if label is not None:
+            label = label.to(device)
+
         z = _sample_latent(N)
-        real_label = _ohe(real_label)
-        d_loss = D_loss_func(G, D, real_image, z, real_label).mean()
+        label = _ohe(label)
+        d_loss = D_loss_func(G, D, image, z, label).mean()
         d_loss.backward()
         D_opt.step()
 

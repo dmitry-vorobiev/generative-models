@@ -15,10 +15,12 @@ from ignite.utils import convert_tensor
 from omegaconf import DictConfig
 from torch import nn, Tensor
 from torch.nn.parallel import DistributedDataParallel
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from torchvision import transforms as T
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, Sized
 
-from .models.stylegan2.train import create_train_loop
-from .models.types import Batch, Device, TensorMap, TrainFunc
+from data.dataset import JustImages
+from models.stylegan2.train import create_train_loop
+from models.types import Batch, Device, TensorMap, TrainFunc
 
 Metrics = Dict[str, Metric]
 
@@ -56,7 +58,7 @@ def log_epoch(engine: Engine) -> None:
     logging.info("ep: {}, {}".format(epoch, stats))
 
 
-def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None):
+def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, device=None):
 
     def _update(e: Engine, batch: Batch) -> TensorMap:
         iteration = e.state.iteration
@@ -99,6 +101,21 @@ def _upd_pbar_iter_from_cp(engine: Engine, pbar: ProgressBar) -> None:
     pbar.n = engine.state.iteration
 
 
+def create_train_loader(conf: DictConfig, epoch_length=-1, rank: Optional[int] = None,
+                        num_replicas: Optional[int] = None) -> Sized:
+    transforms = T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+    ])
+    data = JustImages(conf.root, extensions=tuple(conf.extensions), transform=transforms)
+    print("Found {} images".format(len(data)))
+    loader = torch.utils.data.DataLoader(data,
+                                         batch_size=conf.loader.batch_size,
+                                         num_workers=conf.get('loader.workers', 0),
+                                         drop_last=True)
+    return loader
+
+
 def run(conf: DictConfig):
     epochs = conf.train.epochs
     epoch_length = conf.train.epoch_length
@@ -128,27 +145,20 @@ def run(conf: DictConfig):
     else:
         loader_args = dict()
 
-    train_dl = create_train_loader(conf.data.train, epoch_length=epoch_length, **loader_args)
+    train_dl = create_train_loader(conf.data, epoch_length=epoch_length, **loader_args)
 
     if epoch_length < 1:
         epoch_length = len(train_dl)
 
-    model = instantiate(conf.model).to(device)
-    if distributed:
-        model = DistributedDataParallel(model, device_ids=[local_rank, ], output_device=local_rank)
-        model.to_y = model.module.to_y
-    if rank == 0 and conf.logging.model:
-        print(model)
-
     metric_names = ['G_loss', 'D_loss']
     metrics = create_metrics(metric_names, device if distributed else None)
 
-    G = instantiate(conf.model.G)
-    D = instantiate(conf.model.D)
-    G_loss = instantiate(conf.loss.G)
-    D_loss = instantiate(conf.loss.D)
-    G_opt = instantiate(conf.optim.G)
-    D_opt = instantiate(conf.optim.D)
+    G = instantiate(conf.model.G).to(device)
+    D = instantiate(conf.model.D).to(device)
+    G_loss = instantiate(conf.loss.G).to(device)
+    D_loss = instantiate(conf.loss.D).to(device)
+    G_opt = instantiate(conf.optim.G, G.parameters())
+    D_opt = instantiate(conf.optim.D, D.parameters())
 
     train_loop = create_train_loop(G, D, G_loss, D_loss, G_opt, D_opt, 0, device)
     trainer = create_trainer(train_loop, metrics)
@@ -184,8 +194,6 @@ def run(conf: DictConfig):
             trainer.add_event_handler(Events.STARTED, _upd_pbar_iter_from_cp, pbar)
 
         logging.info("Saving checkpoints to {}".format(save_path))
-
-    if rank == 0:
         max_cp = max(int(cp.get('max_checkpoints', 1)), 1)
         save = DiskSaver(save_path, create_dir=True, require_empty=True)
         make_checkpoint = Checkpoint(to_save, save, n_saved=max_cp)

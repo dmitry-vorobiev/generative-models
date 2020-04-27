@@ -1,3 +1,4 @@
 hydra-core>=0.11.3
 pytorch-ignite>=0.3.0
 torch>=1.4.0
+torchvision

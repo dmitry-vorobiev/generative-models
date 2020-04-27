@@ -15,21 +15,39 @@ distributed:
   local_rank: 0
   url: env://
 
+data:
+  root: /media/dmitry/data/ffhq-dataset/thumbnails128x128
+  extensions:
+    - png
+  loader:
+    batch_size: 16
+    workers: 2
+
 model:
   G:
     class: models.stylegan2.net.Generator
     params:
+      img_res: 128
+      label_dim: 0
+      latent_dim: 128
+      fmap_base: 2048
+      num_mapping_layers: 4
+      mapping_hidden_dim: 128
+      p_style_mix: 0.9
+      truncation_psi: 0.5
+      truncation_cutoff: null
   D:
     class: models.stylegan2.net.Discriminator
     params:
+      img_res: 128
+      label_dim: 0
+      fmap_base: 2048
 
 loss:
   G:
     class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
-    params:
   D:
     class: models.stylegan2.loss.D_LogisticLoss_R1
-    params:
 
 optim:
   G:
@@ -42,6 +60,17 @@ optim:
     params:
       lr: 0.001
       betas: [0.0, 0.999]
+
+train:
+  skip: false
+  epochs: 100
+  epoch_length: 16000
+  checkpoints:
+    load: null
+    base_dir: null
+    interval_epoch: 1
+    interval_iteration: 500
+    max_checkpoints: 100
 
 logging:
   model: false

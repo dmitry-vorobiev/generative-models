@@ -11,4 +11,4 @@ TensorMap = Mapping[str, Tensor]
 GLossFunc = Callable[[Module, Module, Tensor, Optional[Tensor]], Tensor]
 DLossFunc = Callable[[Module, Module, Tensor, Tensor, Optional[Tensor]], Tensor]
 
-TrainFunc = Callable[[Batch], TensorMap]
+TrainFunc = Callable[[Tensor, Optional[Tensor]], TensorMap]
