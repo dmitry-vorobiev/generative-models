@@ -1,0 +1,48 @@
+hydra:
+  run:
+    dir: /media/dmitry/data/outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job_logging:
+    handlers:
+      file:
+        filename: ${hydra.job.name}_${distributed.local_rank}.log
+
+general:
+  gpu: 0
+  seed: 333
+
+distributed:
+  backend: null
+  local_rank: 0
+  url: env://
+
+model:
+  G:
+    class: models.stylegan2.net.Generator
+    params:
+  D:
+    class: models.stylegan2.net.Discriminator
+    params:
+
+loss:
+  G:
+    class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
+    params:
+  D:
+    class: models.stylegan2.loss.D_LogisticLoss_R1
+    params:
+
+optim:
+  G:
+    class: torch.optim.Adam
+    params:
+      lr: 0.001
+      betas: [0.0, 0.999]
+  D:
+    class: torch.optim.Adam
+    params:
+      lr: 0.001
+      betas: [0.0, 0.999]
+
+logging:
+  model: false
+  iter_freq: 100
