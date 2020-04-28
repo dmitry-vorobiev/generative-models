@@ -15,12 +15,13 @@ from ignite.utils import convert_tensor
 from omegaconf import DictConfig
 from torch import nn, Tensor
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms as T
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, Sized
 
 from data.dataset import JustImages
 from models.stylegan2.train import create_train_loop
-from models.types import Batch, Device, TensorMap, TrainFunc
+from models.types import Batch, Device, FloatDict, TrainFunc
 
 Metrics = Dict[str, Metric]
 
@@ -59,9 +60,9 @@ def log_epoch(engine: Engine) -> None:
 
 
 def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, device=None):
-
-    def _update(e: Engine, batch: Batch) -> TensorMap:
+    def _update(e: Engine, batch: Batch) -> FloatDict:
         iteration = e.state.iteration
+        # batch = _prepare_batch(batch, device, non_blocking=True)
         loss = train_func(batch)
         return loss
 
@@ -76,13 +77,14 @@ def add_metrics(engine: Engine, metrics: Metrics):
         metric.attach(engine, name)
 
 
-def _prepare_batch(batch: Any, device: torch.device,
+def _prepare_batch(batch: Batch, device: torch.device,
                    non_blocking: bool) -> Tuple[Any, Any]:
-    x, y = batch
-    return (
-        convert_tensor(x, device=device, non_blocking=non_blocking),
-        convert_tensor(y, device=device, non_blocking=non_blocking),
-    )
+    if isinstance(batch, tuple):
+        x, y = batch
+        return (convert_tensor(x, device=device, non_blocking=non_blocking),
+                convert_tensor(y, device=device, non_blocking=non_blocking))
+    else:
+        return convert_tensor(batch, device=device, non_blocking=non_blocking)
 
 
 def create_metrics(keys: List[str], device: Device = None) -> Metrics:
@@ -109,10 +111,11 @@ def create_train_loader(conf: DictConfig, epoch_length=-1, rank: Optional[int] =
     ])
     data = JustImages(conf.root, extensions=tuple(conf.extensions), transform=transforms)
     print("Found {} images".format(len(data)))
-    loader = torch.utils.data.DataLoader(data,
-                                         batch_size=conf.loader.batch_size,
-                                         num_workers=conf.get('loader.workers', 0),
-                                         drop_last=True)
+    sampler = None
+    if num_replicas is not None:
+        sampler = DistributedSampler(data, num_replicas=num_replicas, rank=rank)
+    loader = DataLoader(data, sampler=sampler, batch_size=conf.loader.batch_size,
+                        num_workers=conf.get('loader.workers', 0), drop_last=True)
     return loader
 
 
@@ -161,7 +164,7 @@ def run(conf: DictConfig):
     D_opt = instantiate(conf.optim.D, D.parameters())
 
     train_loop = create_train_loop(G, D, G_loss, D_loss, G_opt, D_opt, 0, device)
-    trainer = create_trainer(train_loop, metrics)
+    trainer = create_trainer(train_loop, metrics, device)
 
     every_iteration = Events.ITERATION_COMPLETED
     trainer.add_event_handler(every_iteration, TerminateOnNan())
