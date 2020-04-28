@@ -6,7 +6,7 @@ from torch.optim.optimizer import Optimizer
 from typing import Optional
 
 from .net import Discriminator, Generator
-from ..types import Device, DLossFunc, FloatDict, GLossFunc, TrainFunc
+from my_types import Device, DLossFunc, FloatDict, GLossFunc, TrainFunc
 
 
 def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=-1, device=None):
@@ -39,7 +39,7 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         fake_label = _sample_rnd_label(N)
-        g_loss = G_loss_func(G, D, z, fake_label)
+        g_loss, g_stats = G_loss_func(G, D, z, fake_label)
         g_loss.backward()
         G_opt.step()
         del z, fake_label
@@ -55,10 +55,11 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         label = _ohe(label)
-        d_loss = D_loss_func(G, D, image, z, label)
+        d_loss, d_stats = D_loss_func(G, D, image, z, label)
         d_loss.backward()
         D_opt.step()
 
-        return dict(G_loss=g_loss.item(), D_loss=d_loss.item())
+        g_stats.update(d_stats)
+        return g_stats
 
     return _loop

@@ -6,22 +6,21 @@ import time
 import torch
 import torch.distributed as dist
 
+from collections import OrderedDict
 from hydra.utils import instantiate
 from ignite.contrib.handlers import ProgressBar
 from ignite.engine import Engine, Events
 from ignite.handlers import Checkpoint, DiskSaver, TerminateOnNan
-from ignite.metrics import Accuracy, Loss, Metric, RunningAverage
+from ignite.metrics import Metric, RunningAverage
 from ignite.utils import convert_tensor
 from omegaconf import DictConfig
-from torch import nn, Tensor
-from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms as T
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union, Sized
+from typing import Any, Dict, List, Optional, Tuple, Sized
 
 from data.dataset import JustImages
 from models.stylegan2.train import create_train_loop
-from models.types import Batch, Device, FloatDict, TrainFunc
+from my_types import Batch, Device, FloatDict, TrainFunc
 
 Metrics = Dict[str, Metric]
 
@@ -88,14 +87,12 @@ def _prepare_batch(batch: Batch, device: torch.device,
 
 
 def create_metrics(keys: List[str], device: Device = None) -> Metrics:
-    def _out_transform(key: str):
-        return lambda out: out[key]
+    def _out_transform(kek: str):
+        return lambda out: out[kek]
 
-    metrics = {key: RunningAverage(output_transform=_out_transform(key))
+    metrics = {key: RunningAverage(output_transform=_out_transform(key),
+                                   device=device)
                for key in keys}
-    if device:
-        for m in metrics.values():
-            m.device = device
     return metrics
 
 
@@ -153,7 +150,7 @@ def run(conf: DictConfig):
     if epoch_length < 1:
         epoch_length = len(train_dl)
 
-    metric_names = ['G_loss', 'D_loss']
+    metric_names = list(conf.logging.stats)
     metrics = create_metrics(metric_names, device if distributed else None)
 
     G = instantiate(conf.model.G).to(device)

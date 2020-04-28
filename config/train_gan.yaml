@@ -79,3 +79,11 @@ train:
 logging:
   model: false
   iter_freq: 100
+  stats:
+    - G_loss
+    - G_pl
+    - G_fake
+    - D_loss
+    - D_r1
+    - D_real
+    - D_fake

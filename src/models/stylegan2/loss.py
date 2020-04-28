@@ -6,6 +6,7 @@ from torch import autograd, nn, Tensor
 from typing import Union, Tuple
 
 from .net import Discriminator, Generator, Latent, Label
+from my_types import FloatDict
 
 
 def r1_penalty(real_pred: Tensor, real_img: Tensor, reduce_mean=True) -> Tensor:
@@ -35,8 +36,14 @@ class D_LogisticLoss_R1(nn.Module):
     def update_count(self) -> None:
         self.count = (self.count + 1) % self.freq
 
+    @staticmethod
+    def zero_stats():
+        return dict(D_loss=0.0, D_r1=0.0, D_real=0.0, D_fake=0.0)
+
     def forward(self, G, D, reals, z, label=None):
-        # type: (Generator, Discriminator, Tensor, Latent, Label) -> Tensor
+        # type: (Generator, Discriminator, Tensor, Latent, Label) -> Tuple[Tensor, FloatDict]
+        stats = self.zero_stats()
+
         if self.should_reg:
             reals.requires_grad_(True)
 
@@ -46,13 +53,20 @@ class D_LogisticLoss_R1(nn.Module):
         # -log(1 - sigmoid(fake_score)) + -log(sigmoid(real_score))
         loss = (F.softplus(fake_score) + F.softplus(-real_score)).mean()
 
+        with torch.no_grad():
+            stats['D_real'] = torch.sigmoid(real_score).mean().item()
+            stats['D_fake'] = torch.sigmoid(fake_score).mean().item()
+        del fake_score, fakes, fake_w, z, label
+
         if self.should_reg:
             penalty = r1_penalty(real_score, reals, reduce_mean=True)
+            stats['D_r1'] = penalty.item()
             reg = penalty * (self.gamma * 0.5)
             loss = loss + (reg * self.freq)
 
+        stats['D_loss'] = loss.item()
         self.update_count()
-        return loss
+        return loss, stats
 
 
 def path_length(fake_img: Tensor, fake_w: Tensor) -> Tensor:
@@ -96,15 +110,26 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
     def update_count(self) -> None:
         self.count = (self.count + 1) % self.freq
 
+    @staticmethod
+    def zero_stats():
+        return dict(G_loss=0.0, G_pl=0.0, G_fake=0.0)
+
     def forward(self, G, D, z, label=None):
-        # type: (Generator, Discriminator, Latent, Label) -> Tensor
+        # type: (Generator, Discriminator, Latent, Label) -> Tuple[Tensor, FloatDict]
+        stats = self.zero_stats()
+
         fakes, w = G(z, label)
         fake_score = D(fakes, label)
         loss = F.softplus(-fake_score).mean()  # -log(sigmoid(fake_score))
 
+        with torch.no_grad():
+            stats['G_fake'] = torch.sigmoid(fake_score).mean().item()
+        del fake_score, z, label
+
         if self.should_reg:
-            penalty, self.pl_avg = path_len_penalty(fakes, w, self.pl_avg, self.decay,
-                                                    reduce_mean=True)
+            penalty, self.pl_avg = path_len_penalty(
+                fakes, w, self.pl_avg, self.decay, reduce_mean=True)
+            stats['G_pl'] = penalty.item()
 
             # Note: The division in pl_noise decreases the weight by num_pixels,
             # and the reduce_mean in pl_lengths decreases it by num_affine_layers.
@@ -118,5 +143,6 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
             reg = penalty * self.weight
             loss = loss + (reg * self.freq)
 
+        stats['G_loss'] = loss.item()
         self.update_count()
-        return loss
+        return loss, stats
