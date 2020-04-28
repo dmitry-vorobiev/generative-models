@@ -7,6 +7,7 @@ def minibatch_stddev(x: Tensor, group_size: int, num_new_features: int, eps=1e-8
     assert C % num_new_features == 0, 'C must be divisible by n'
     # Minibatch must be divisible by (or smaller than) group_size.
     G = min(group_size, N)
+    assert N % G == 0, 'Batch size must be divisible by group_size'
     # [GMncHW] Split minibatch into M groups of size G. Split channels into n channel groups c.
     y = x.reshape(G, -1, num_new_features, C//num_new_features, H, W)
     # [GMncHW] Subtract mean over group.

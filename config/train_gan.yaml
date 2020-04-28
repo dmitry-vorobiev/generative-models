@@ -7,7 +7,7 @@ hydra:
         filename: ${hydra.job.name}_${distributed.local_rank}.log
 
 general:
-  gpu: 0
+  gpu: 1
   seed: 333
 
 distributed:
@@ -20,7 +20,7 @@ data:
   extensions:
     - png
   loader:
-    batch_size: 16
+    batch_size: 32
     workers: 2
 
 model:
@@ -46,8 +46,12 @@ model:
 loss:
   G:
     class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
+    params:
+      pl_reg_freq: 1
   D:
     class: models.stylegan2.loss.D_LogisticLoss_R1
+    params:
+      r1_freq: 1
 
 optim:
   G:

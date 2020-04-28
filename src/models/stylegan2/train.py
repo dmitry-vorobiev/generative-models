@@ -39,7 +39,7 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         fake_label = _sample_rnd_label(N)
-        g_loss = G_loss_func(G, D, z, fake_label).mean()
+        g_loss = G_loss_func(G, D, z, fake_label)
         g_loss.backward()
         G_opt.step()
         del z, fake_label
@@ -55,7 +55,7 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         label = _ohe(label)
-        d_loss = D_loss_func(G, D, image, z, label).mean()
+        d_loss = D_loss_func(G, D, image, z, label)
         d_loss.backward()
         D_opt.step()
 

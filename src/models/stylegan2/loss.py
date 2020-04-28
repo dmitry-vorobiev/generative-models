@@ -8,9 +8,12 @@ from typing import Union, Tuple
 from .net import Discriminator, Generator, Latent, Label
 
 
-def r1_penalty(real_pred: Tensor, real_img: Tensor):
+def r1_penalty(real_pred: Tensor, real_img: Tensor, reduce_mean=True) -> Tensor:
     grad, = autograd.grad(real_pred.sum(), real_img, create_graph=True)
-    return grad.pow(2).sum(dim=(1, 2, 3))[:, None]
+    penalty = grad.pow(2).sum(dim=(1, 2, 3))
+    if reduce_mean:
+        return penalty.mean()
+    return penalty[:, None]
 
 
 # noinspection PyPep8Naming
@@ -41,10 +44,10 @@ class D_LogisticLoss_R1(nn.Module):
         real_score = D(reals, label)
         fake_score = D(fakes, label)
         # -log(1 - sigmoid(fake_score)) + -log(sigmoid(real_score))
-        loss = F.softplus(fake_score) + F.softplus(-real_score)
+        loss = (F.softplus(fake_score) + F.softplus(-real_score)).mean()
 
         if self.should_reg:
-            penalty = r1_penalty(real_score, reals)
+            penalty = r1_penalty(real_score, reals, reduce_mean=True)
             reg = penalty * (self.gamma * 0.5)
             loss = loss + (reg * self.freq)
 
@@ -60,12 +63,14 @@ def path_length(fake_img: Tensor, fake_w: Tensor) -> Tensor:
     return torch.sqrt(grad.pow(2).sum(dim=2, keepdim=True).mean(dim=0))
 
 
-def path_len_penalty(fake_img, fake_w, path_len_avg=0.0, decay=0.01):
-    # type: (Tensor, Tensor, Union[float, Tensor], float) -> Tuple[Tensor, Tensor]
+def path_len_penalty(fake_img, fake_w, path_len_avg=0.0, decay=0.01, reduce_mean=True):
+    # type: (Tensor, Tensor, Union[float, Tensor], float, bool) -> Tuple[Tensor, Tensor]
     path_len = path_length(fake_img, fake_w)
     with torch.no_grad():
         path_len_avg = path_len_avg + decay * (path_len.mean() - path_len_avg)
     penalty = torch.pow(path_len - path_len_avg, 2)
+    if reduce_mean:
+        penalty = penalty.mean()
     return penalty, path_len_avg
 
 
@@ -95,10 +100,11 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
         # type: (Generator, Discriminator, Latent, Label) -> Tensor
         fakes, w = G(z, label)
         fake_score = D(fakes, label)
-        loss = F.softplus(-fake_score)  # -log(sigmoid(fake_score))
+        loss = F.softplus(-fake_score).mean()  # -log(sigmoid(fake_score))
 
         if self.should_reg:
-            penalty, self.pl_avg = path_len_penalty(fakes, w, self.pl_avg, self.decay)
+            penalty, self.pl_avg = path_len_penalty(fakes, w, self.pl_avg, self.decay,
+                                                    reduce_mean=True)
 
             # Note: The division in pl_noise decreases the weight by num_pixels,
             # and the reduce_mean in pl_lengths decreases it by num_affine_layers.
