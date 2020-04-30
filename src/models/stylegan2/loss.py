@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from torch import autograd, nn, Tensor
-from typing import Union, Tuple
+from typing import Optional, Union, Tuple
 
 from .net import Discriminator, Generator, Latent, Label
 from my_types import FloatDict
@@ -40,9 +40,10 @@ class D_LogisticLoss_R1(nn.Module):
     def zero_stats():
         return dict(D_loss=0.0, D_r1=0.0, D_real=0.0, D_fake=0.0)
 
-    def forward(self, G, D, reals, z, label=None):
-        # type: (Generator, Discriminator, Tensor, Latent, Label) -> Tuple[Tensor, FloatDict]
-        stats = self.zero_stats()
+    def forward(self, G, D, reals, z, label=None, stats=None):
+        # type: (Generator, Discriminator, Tensor, Latent, Label, Optional[FloatDict]) -> Tuple[Tensor, FloatDict]
+        if stats is None:
+            stats = self.zero_stats()
 
         if self.should_reg:
             reals.requires_grad_(True)
@@ -54,9 +55,9 @@ class D_LogisticLoss_R1(nn.Module):
         loss = (F.softplus(fake_score) + F.softplus(-real_score)).mean()
 
         with torch.no_grad():
-            stats['D_real'] = torch.sigmoid(real_score).mean().item()
-            stats['D_fake'] = torch.sigmoid(fake_score).mean().item()
-        del fake_score, fakes, fake_w, z, label
+            stats['D_real'] = real_score.mean().item()
+            stats['D_fake'] = fake_score.mean().item()
+        del fake_score, fakes, fake_w
 
         if self.should_reg:
             penalty = r1_penalty(real_score, reals, reduce_mean=True)
@@ -114,17 +115,18 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
     def zero_stats():
         return dict(G_loss=0.0, G_pl=0.0, G_fake=0.0)
 
-    def forward(self, G, D, z, label=None):
-        # type: (Generator, Discriminator, Latent, Label) -> Tuple[Tensor, FloatDict]
-        stats = self.zero_stats()
+    def forward(self, G, D, z, label=None, stats=None):
+        # type: (Generator, Discriminator, Latent, Label, Optional[FloatDict]) -> Tuple[Tensor, FloatDict]
+        if stats is None:
+            stats = self.zero_stats()
 
         fakes, w = G(z, label)
         fake_score = D(fakes, label)
         loss = F.softplus(-fake_score).mean()  # -log(sigmoid(fake_score))
 
         with torch.no_grad():
-            stats['G_fake'] = torch.sigmoid(fake_score).mean().item()
-        del fake_score, z, label
+            stats['G_fake'] = fake_score.mean().item()
+        del fake_score
 
         if self.should_reg:
             penalty, self.pl_avg = path_len_penalty(

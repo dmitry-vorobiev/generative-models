@@ -47,11 +47,11 @@ loss:
   G:
     class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
     params:
-      pl_reg_freq: 1
+      pl_reg_freq: 4
   D:
     class: models.stylegan2.loss.D_LogisticLoss_R1
     params:
-      r1_freq: 1
+      r1_freq: 16
 
 optim:
   G:
@@ -80,10 +80,10 @@ logging:
   model: false
   iter_freq: 100
   stats:
+    - G_fake
     - G_loss
     - G_pl
-    - G_fake
-    - D_loss
-    - D_r1
     - D_real
     - D_fake
+    - D_loss
+    - D_r1

@@ -9,7 +9,7 @@ Device = Optional[torch.device]
 FloatDict = Dict[str, float]
 TensorMap = Mapping[str, Tensor]
 
-GLossFunc = Callable[[Module, Module, Tensor, Optional[Tensor]], Tensor]
-DLossFunc = Callable[[Module, Module, Tensor, Tensor, Optional[Tensor]], Tensor]
+GLossFunc = Callable[[Module, Module, Tensor, Optional[Tensor], Optional[FloatDict]], Tensor]
+DLossFunc = Callable[[Module, Module, Tensor, Tensor, Optional[Tensor], Optional[FloatDict]], Tensor]
 
 TrainFunc = Callable[[Batch], FloatDict]

@@ -65,15 +65,11 @@ def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, dev
         loss = train_func(batch)
         return loss
 
-    engine = Engine(_update)
+    trainer = Engine(_update)
     if metrics:
-        add_metrics(engine, metrics)
-    return engine
-
-
-def add_metrics(engine: Engine, metrics: Metrics):
-    for name, metric in metrics.items():
-        metric.attach(engine, name)
+        for name, metric in metrics.items():
+            metric.attach(trainer, name)
+    return trainer
 
 
 def _prepare_batch(batch: Batch, device: torch.device,

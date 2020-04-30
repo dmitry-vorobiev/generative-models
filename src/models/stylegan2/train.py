@@ -26,6 +26,8 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
             return None
         return F.one_hot(y, num_classes=num_classes)
 
+    stats = dict()
+
     def _loop(image: Tensor, label=None) -> FloatDict:
         G.train()
         D.train()
@@ -39,7 +41,7 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         fake_label = _sample_rnd_label(N)
-        g_loss, g_stats = G_loss_func(G, D, z, fake_label)
+        g_loss, g_stats = G_loss_func(G, D, z, fake_label, stats)
         g_loss.backward()
         G_opt.step()
         del z, fake_label
@@ -55,11 +57,10 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
 
         z = _sample_latent(N)
         label = _ohe(label)
-        d_loss, d_stats = D_loss_func(G, D, image, z, label)
+        d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
         d_loss.backward()
         D_opt.step()
 
-        g_stats.update(d_stats)
-        return g_stats
+        return stats
 
     return _loop
