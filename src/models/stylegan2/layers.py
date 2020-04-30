@@ -144,7 +144,7 @@ class ModulatedConv2d(nn.Conv2d):
             d = torch.rsqrt(w.pow(2).sum(dim=(2, 3, 4), keepdim=True) + 1e-8)
             w = w * d
 
-        _, C1, _, Hk, Wk = w.shape
+        N, C1, C0, Hk, Wk = w.shape
         w = w.view(N*C1, C0, Hk, Wk)
 
         x = x.view(1, N*C0, H0, W0)
