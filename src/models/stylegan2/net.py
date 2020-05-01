@@ -8,14 +8,15 @@ from torch import nn, Tensor
 from typing import Optional, Tuple
 
 from .layers import AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, EqualLinear, \
-    EqualLeakyReLU, Flatten, ModulatedConv2d, Normalize, ConcatLabels
+    EqualLeakyReLU, Flatten, Normalize, ConcatLabels
+from .mod_conv import ModulatedConv2d
 
 Latent = Tensor
 Label = Optional[Tensor]
 DLatent = Tensor
 
 
-def upsample(x, factor):
+def _upsample(x, factor):
     return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
 
 
@@ -31,22 +32,15 @@ def style_transform(in_features, out_features):
 
 
 class StyledLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim, up=False):
+    def __init__(self, in_channels, out_channels, style_dim, upsample=False, impl="torch"):
         super(StyledLayer, self).__init__()
-        if up:
-            self.upscale = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        else:
-            self.upscale = None
-
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
-                                    stride=1, padding=1)
+                                    upsample=upsample, upsample_impl=impl)
         self.add_noise = AddRandomNoise()
         self.act_fn = EqualLeakyReLU(inplace=True)
 
     def forward(self, x: Tensor, w: DLatent) -> Tensor:
-        if self.upscale:
-            x = self.upscale(x)
         y = self.style(w)
         x = self.conv(x, y)
         x = self.act_fn(self.add_noise(x))
@@ -57,8 +51,7 @@ class ToRGB(nn.Module):
     def __init__(self, in_channels, out_channels, style_dim):
         super(ToRGB, self).__init__()
         self.style = style_transform(style_dim, in_channels)
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1,
-                                    stride=1, padding=0, demodulate=False)
+        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1, demodulate=False)
 
     def forward(self, x: Tensor, w: DLatent) -> Tensor:
         y = self.style(w)
@@ -118,7 +111,7 @@ class MappingNet(nn.Module):
 
 class SynthesisNet(nn.Module):
     def __init__(self, img_res=1024, img_channels=3, style_dim=512,
-                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512):
+                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512, impl="ref"):
         super(SynthesisNet, self).__init__()
 
         if img_res <= 4:
@@ -139,8 +132,8 @@ class SynthesisNet(nn.Module):
 
         for res in range(1, res_log2 - 1):
             inp_ch, out_ch = nf(res), nf(res + 1)
-            main += [StyledLayer(inp_ch, out_ch, style_dim, up=True),
-                     StyledLayer(out_ch, out_ch, style_dim)]
+            main += [StyledLayer(inp_ch, out_ch, style_dim, upsample=True, impl=impl),
+                     StyledLayer(out_ch, out_ch, style_dim, impl=impl)]
             outs += [ToRGB(out_ch, img_channels, style_dim)]
 
         self.input = Input(nf(1), size=4)
@@ -161,7 +154,7 @@ class SynthesisNet(nn.Module):
                 if not i:
                     y = out(x, w[i+1])
                 else:
-                    y = upsample(y, 2) + out(x, w[i+1])
+                    y = _upsample(y, 2) + out(x, w[i+1])
         return y
 
 
