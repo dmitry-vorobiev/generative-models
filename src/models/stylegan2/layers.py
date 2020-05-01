@@ -10,9 +10,9 @@ from .ops import minibatch_stddev
 
 
 def equalized_lr_init(weight: Tensor, bias: Tensor, scale_weights=True,
-                      lr_mult=1.0) -> float:
-    fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weight)
-    he_std = 1.0 / math.sqrt(fan_in)
+                      lr_mult=1.0, transposed=False) -> float:
+    fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(weight)
+    he_std = 1.0 / math.sqrt(fan_out if transposed else fan_in)
 
     if scale_weights:
         init_std = 1.0 / lr_mult
