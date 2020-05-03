@@ -116,7 +116,7 @@ class ModulatedConv2d(_ConvNd):
         self.demodulate = demodulate
         self.scale_weights = scale_weights
         self.lr_mult = lr_mult
-        self.w_mult = 1.0
+        self.weight_mult = 1.0
 
         transposed = upsample and upsample_impl == "ref"
         super(ModulatedConv2d, self).__init__(
@@ -132,6 +132,8 @@ class ModulatedConv2d(_ConvNd):
                 # shared LPF weights, don't want to save as buffer here
                 self._weight_blur = blur_kernel
             elif hasattr(blur_kernel, "__call__"):
+                # a way to get a proper reference to the shared buffer
+                # after it has been moved to GPU
                 self._weight_blur_func = blur_kernel
             else:
                 self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, 2))
@@ -156,8 +158,8 @@ class ModulatedConv2d(_ConvNd):
         return self._weight_blur
 
     def reset_parameters(self):
-        self.w_mult = equalized_lr_init(self.weight, self.bias, self.scale_weights,
-                                        self.lr_mult, self.transposed)
+        self.weight_mult = equalized_lr_init(self.weight, self.bias, self.scale_weights,
+                                             self.lr_mult, self.transposed)
 
     def _modulate(self, weight: Tensor, style: Tensor) -> Tensor:
         w = weight[None, :]  # batch dim
@@ -195,24 +197,20 @@ class ModulatedConv2d(_ConvNd):
         _, _, H1, W1 = x.shape
         return x.view(N, C1, H1, W1)
 
-    def conv2d_forward(self, x, style, weight, bias):
-        # type: (Tensor, Tensor, Tensor, Tensor) -> Tensor
+    def conv2d_forward(self, x, style, weight):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
         w = self._modulate(weight, style)
         if self.demodulate:
             w = self._demodulate(w)
 
         N, C0, H0, W0 = x.shape
         x = x.view(1, N * C0, H0, W0)
-        out = self._exec(x, w)
-        del x, w
-
-        if bias is not None:
-            out = out + bias[:, None, None]
-        return out
+        return self._exec(x, w)
 
     def forward(self, x, style):
-        weight = self.weight * self.w_mult
+        x = self.conv2d_forward(x, style, self.weight * self.weight_mult)
         bias = self.bias
         if bias is not None:
             bias = bias * self.lr_mult
-        return self.conv2d_forward(x, style, weight, bias)
+            x = x + bias[:, None, None]
+        return x
