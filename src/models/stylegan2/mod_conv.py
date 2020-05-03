@@ -4,12 +4,12 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.utils import _pair
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 from .layers import equalized_lr_init
 
 
-def _upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
+def upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
     # type: (Tensor, Tensor, int, int, int, int, int, int, int, int) -> Tensor
     N, C, H, W = x.shape
     Hk, Wk = w.shape[-2:]
@@ -42,7 +42,7 @@ def _upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
     return x
 
 
-def _upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
+def upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
     # type: (Tensor, Tensor, int, int, int, int) -> Tensor
     N, C, H, W = x.shape
     assert H > 0 and W > 0
@@ -51,13 +51,9 @@ def _upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
 
     # Upsample (insert zeros).
     if up > 1:
-        x = x.view(-1, C, H, 1, W, 1)
+        x = x[:, :, :, None, :, None]
         x = F.pad(x, [0, up - 1, 0, 0, 0, up - 1])
-        x = x.view(-1, C, H * up, W * up)
-
-        # Same results:
-        # w_up = torch.ones(1, device=x.device).expand(C, 1, 1, -1)
-        # x = F.conv_transpose2d(x, w_up, stride=up, output_padding=1, groups=C)
+        x = x.view(N, C, H * up, W * up)
 
     # Pad (crop if negative).
     # for padding like (1,1), (2,2), etc. use conv2d argument
@@ -103,7 +99,7 @@ def _same(k: Sequence) -> bool:
 
 class ModulatedConv2d(_ConvNd):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, demodulate=True,
-                 upsample=False, upsample_impl="ref", lp_kernel=None,
+                 upsample=False, upsample_impl="ref", blur_kernel=None,
                  scale_weights=True, lr_mult=1.0):
         if upsample_impl not in ["torch", "ref"]:
             raise AttributeError("impl should be one of [torch, ref]")
@@ -128,19 +124,19 @@ class ModulatedConv2d(_ConvNd):
             transposed, _pair(0), groups=1, bias=bias, padding_mode='zeros')
 
         if upsample:
-            if lp_kernel is None:
-                lp_kernel = [1, 3, 3, 1]
-            if isinstance(lp_kernel, torch.Tensor):
-                C1, C0, Hb, Wb = lp_kernel.shape
+            if blur_kernel is None:
+                blur_kernel = [1, 3, 3, 1]
+            if isinstance(blur_kernel, torch.Tensor):
+                C1, C0, Hb, Wb = blur_kernel.shape
                 assert C1 == 1 and C0 == 1 and Hb == Wb
                 # shared LPF weights, don't want to save as buffer here
-                self.lp_weight = lp_kernel
+                self.weight_blur = blur_kernel
             else:
-                self.register_buffer("lp_weight", setup_blur_weights(lp_kernel, 2))
+                self.register_buffer("weight_blur", setup_blur_weights(blur_kernel, 2))
 
-            Hb = len(lp_kernel)
-            Hc = kernel_size[0]
-            p = (Hb - 2) - (Hc - 1)
+            W_blur = self.weight_blur.size(-1)
+            W_conv = kernel_size[0]
+            p = (W_blur - 2) - (W_conv - 1)
             self.pad0 = (p + 1) // 2 + 1
             self.pad1 = p // 2 + 1
 
@@ -150,8 +146,6 @@ class ModulatedConv2d(_ConvNd):
                 self._exec = self._upsample_conv2d_torch
         else:
             self._exec = self._conv2d
-
-        self.upsample = upsample
 
     def reset_parameters(self):
         self.w_mult = equalized_lr_init(self.weight, self.bias, self.scale_weights,
@@ -178,7 +172,7 @@ class ModulatedConv2d(_ConvNd):
         x = F.conv_transpose2d(x, w, stride=2, padding=0, groups=N)
         _, _, H1, W1, = x.shape
         x = x.view(N, C1, H1, W1)
-        return _upfirdn_2d_opt(x, self.lp_weight, pad0=self.pad0, pad1=self.pad1)
+        return upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
 
     def _upsample_conv2d_torch(self, x, w):
         # type: (Tensor, Tensor) -> Tensor

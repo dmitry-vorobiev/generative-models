@@ -4,19 +4,21 @@ import random
 import torch
 import torch.nn.functional as F
 
+from functools import partial
 from torch import nn, Tensor
 from typing import Optional, Tuple
 
 from .layers import AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, EqualLinear, \
     EqualLeakyReLU, Flatten, Normalize, ConcatLabels
-from .mod_conv import ModulatedConv2d
+from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d
 
 Latent = Tensor
 Label = Optional[Tensor]
 DLatent = Tensor
 
 
-def _upsample(x, factor):
+def _upsample_torch(x, factor):
+    # type: (Tensor, int) -> Tensor
     return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
 
 
@@ -32,11 +34,12 @@ def style_transform(in_features, out_features):
 
 
 class StyledLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim, upsample=False, impl="torch"):
+    def __init__(self, in_channels, out_channels, style_dim, upsample=False,
+                 impl="torch", blur_kernel=None):
         super(StyledLayer, self).__init__()
         self.style = style_transform(style_dim, in_channels)
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3,
-                                    upsample=upsample, upsample_impl=impl)
+        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
+                                    upsample_impl=impl, blur_kernel=blur_kernel)
         self.add_noise = AddRandomNoise()
         self.act_fn = EqualLeakyReLU(inplace=True)
 
@@ -111,7 +114,8 @@ class MappingNet(nn.Module):
 
 class SynthesisNet(nn.Module):
     def __init__(self, img_res=1024, img_channels=3, style_dim=512,
-                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512, impl="ref"):
+                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
+                 impl="ref", blur_kernel=None):
         super(SynthesisNet, self).__init__()
 
         if img_res <= 4:
@@ -120,6 +124,26 @@ class SynthesisNet(nn.Module):
         res_log2 = int(math.log2(img_res))
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
+
+        if impl not in ["torch", "ref"]:
+            raise AttributeError("impl should be one of [torch, ref]")
+
+        if impl == "ref":
+            if blur_kernel is None:
+                blur_kernel = [1, 3, 3, 1]
+            weight_blur = setup_blur_weights(blur_kernel, 2)
+            self.register_buffer("weight_blur", weight_blur)
+
+            p = weight_blur.size(-1) - 2
+            self.pad0 = (p + 1) // 2 + 1
+            self.pad1 = p // 2
+
+            # can't use partial here, because the weight tensor needs to be transferred
+            # to the correct device first
+            self._upsample = self._upsample_ref
+        else:
+            self.weight_blur = None
+            self._upsample = partial(_upsample_torch, factor=2)
 
         self.res_log2 = res_log2
 
@@ -141,8 +165,11 @@ class SynthesisNet(nn.Module):
         self.outs = nn.ModuleList(outs)
 
     @property
-    def num_layers(self):
+    def num_layers(self) -> int:
         return len(self.main) + 1
+
+    def _upsample_ref(self, x: Tensor) -> Tensor:
+        return upfirdn_2d_opt(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
     def forward(self, w: DLatent) -> Tensor:
         x = self.input(w.size(1))
@@ -154,7 +181,7 @@ class SynthesisNet(nn.Module):
                 if not i:
                     y = out(x, w[i+1])
                 else:
-                    y = _upsample(y, 2) + out(x, w[i+1])
+                    y = self._upsample(y) + out(x, w[i+1])
         return y
 
 
