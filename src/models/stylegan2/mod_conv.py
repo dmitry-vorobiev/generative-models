@@ -130,9 +130,11 @@ class ModulatedConv2d(_ConvNd):
                 C1, C0, Hb, Wb = blur_kernel.shape
                 assert C1 == 1 and C0 == 1 and Hb == Wb
                 # shared LPF weights, don't want to save as buffer here
-                self.weight_blur = blur_kernel
+                self._weight_blur = blur_kernel
+            elif hasattr(blur_kernel, "__call__"):
+                self._weight_blur_func = blur_kernel
             else:
-                self.register_buffer("weight_blur", setup_blur_weights(blur_kernel, 2))
+                self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, 2))
 
             W_blur = self.weight_blur.size(-1)
             W_conv = kernel_size[0]
@@ -146,6 +148,12 @@ class ModulatedConv2d(_ConvNd):
                 self._exec = self._upsample_conv2d_torch
         else:
             self._exec = self._conv2d
+
+    @property
+    def weight_blur(self):
+        if hasattr(self, '_weight_blur_func'):
+            return self._weight_blur_func()
+        return self._weight_blur
 
     def reset_parameters(self):
         self.w_mult = equalized_lr_init(self.weight, self.bias, self.scale_weights,

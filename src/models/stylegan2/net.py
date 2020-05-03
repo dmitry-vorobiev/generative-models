@@ -139,7 +139,7 @@ class SynthesisNet(nn.Module):
             self.pad1 = p // 2
 
             # can't use partial here, because the weight tensor needs to be transferred
-            # to the correct device first
+            # to the correct device first (lambda bellow is for the same reason)
             self._upsample = self._upsample_ref
         else:
             self.weight_blur = None
@@ -156,7 +156,8 @@ class SynthesisNet(nn.Module):
 
         for res in range(1, res_log2 - 1):
             inp_ch, out_ch = nf(res), nf(res + 1)
-            main += [StyledLayer(inp_ch, out_ch, style_dim, upsample=True, impl=impl),
+            main += [StyledLayer(inp_ch, out_ch, style_dim, upsample=True, impl=impl,
+                                 blur_kernel=lambda: self.weight_blur),
                      StyledLayer(out_ch, out_ch, style_dim, impl=impl)]
             outs += [ToRGB(out_ch, img_channels, style_dim)]
 
