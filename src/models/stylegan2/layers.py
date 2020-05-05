@@ -70,6 +70,24 @@ class Input(nn.Module):
         return x
 
 
+class AddBias(nn.Module):
+    def __init__(self, features: int, lr_mult=1.0):
+        super(AddBias, self).__init__()
+        self.bias = nn.Parameter(torch.empty(features), requires_grad=True)
+        self.lr_mult = lr_mult
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.zeros_(self.bias)
+
+    def forward(self, x):
+        bias = self.bias * self.lr_mult
+        if x.ndim == 4:
+            bias = bias[:, None, None]
+        x += bias
+        return x
+
+
 class EqualLinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True,
                  scale_weights=True, lr_mult=1.0):

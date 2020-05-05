@@ -6,10 +6,10 @@ import torch.nn.functional as F
 
 from functools import partial
 from torch import nn, Tensor
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
-from .layers import AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, EqualLinear, \
-    EqualLeakyReLU, Flatten, Normalize, ConcatLabels
+from .layers import AddBias, AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, \
+    EqualLinear, EqualLeakyReLU, Flatten, Normalize, ConcatLabels
 from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d
 
 Latent = Tensor
@@ -22,12 +22,20 @@ def _upsample_torch(x, factor):
     return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
 
 
-def conv_lrelu(in_ch: int, out_ch: int):
-    return [EqualConv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=True),
+def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):
+    # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
+    return [EqualConv2d(in_ch, out_ch, kernel_size=kernel, padding=(kernel // 2), bias=bias),
             EqualLeakyReLU(inplace=True)]
 
 
+def conv_down_torch(in_ch, out_ch, kernel=3, bias=False):
+    # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
+    return [EqualConv2d(in_ch, out_ch, kernel_size=kernel, padding=(kernel // 2), bias=bias),
+            nn.AvgPool2d(2)]
+
+
 def style_transform(in_features, out_features):
+    # type: (int, int) -> EqualLinear
     lin = EqualLinear(in_features, out_features, bias=True)
     nn.init.ones_(lin.bias)
     return lin
@@ -78,14 +86,13 @@ class ResidualBlock(nn.Module):
         super(ResidualBlock, self).__init__()
         self.conv = nn.Sequential(
             *conv_lrelu(in_channels, in_channels),
-            *conv_lrelu(in_channels, out_channels),
-            nn.AvgPool2d(2))
-        self.down = nn.Sequential(
-            EqualConv2d(in_channels, out_channels, kernel_size=1, bias=False),
-            nn.AvgPool2d(2))
+            *conv_down_torch(in_channels, out_channels),
+            AddBias(out_channels),
+            EqualLeakyReLU(inplace=True))
+        self.skip = nn.Sequential(*conv_down_torch(in_channels, out_channels, kernel=1))
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.conv(x) + self.down(x)
+        x = self.conv(x) + self.skip(x)
         return x * (1 / math.sqrt(2))
 
 

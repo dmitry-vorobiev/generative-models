@@ -84,7 +84,7 @@ def setup_blur_weights(k: Sequence[int], up_factor=2) -> Tensor:
     if k is None:
         k = [1] * up_factor
     if not isinstance(k, list):
-        raise AttributeError("lpf_kernel must be of type List or None")
+        raise AttributeError("blur_kernel must be of type List or None")
     k = _setup_kernel(k) * (up_factor ** 2)
     w = torch.flip(k, dims=(0, 1))[None, None, :]
     return w
