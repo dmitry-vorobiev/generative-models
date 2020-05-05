@@ -6,7 +6,7 @@ from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.utils import _pair
 from typing import List, Sequence, Tuple
 
-from .layers import equalized_lr_init
+from .layers import equalized_lr_init, EqualizedLRConv2d
 
 
 def upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
@@ -80,14 +80,18 @@ def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
     return k
 
 
-def setup_blur_weights(k: Sequence[int], up_factor=2) -> Tensor:
+def setup_blur_weights(k: Sequence[int], up=0, down=0) -> Tensor:
+    assert not (up and down)
     if k is None:
-        k = [1] * up_factor
+        k = [1] * (up or down)
     if not isinstance(k, list):
         raise AttributeError("blur_kernel must be of type List or None")
-    k = _setup_kernel(k) * (up_factor ** 2)
-    w = torch.flip(k, dims=(0, 1))[None, None, :]
-    return w
+    k = _setup_kernel(k)
+    if up:
+        k *= (up ** 2)
+    # from _upfirdn_2d_ref:
+    # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
+    return torch.flip(k, dims=(0, 1))[None, None, :]
 
 
 def _same(k: Sequence) -> bool:
@@ -136,7 +140,7 @@ class ModulatedConv2d(_ConvNd):
                 # after it has been moved to GPU
                 self._weight_blur_func = blur_kernel
             else:
-                self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, 2))
+                self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, up=2))
 
             W_blur = self.weight_blur.size(-1)
             W_conv = kernel_size[0]
@@ -209,8 +213,44 @@ class ModulatedConv2d(_ConvNd):
 
     def forward(self, x, style):
         x = self.conv2d_forward(x, style, self.weight * self.weight_mult)
-        bias = self.bias
-        if bias is not None:
-            bias = bias * self.lr_mult
+        if self.bias is not None:
+            bias = self.bias * self.lr_mult
             x = x + bias[:, None, None]
         return x
+
+
+# noinspection PyPep8Naming
+class Conv2d_Downsample(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True, blur_kernel=None):
+        super(Conv2d_Downsample, self).__init__()
+        self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=2, bias=bias)
+
+        if blur_kernel is None:
+            blur_kernel = [1, 3, 3, 1]
+        if isinstance(blur_kernel, torch.Tensor):
+            C1, C0, Hb, Wb = blur_kernel.shape
+            assert C1 == 1 and C0 == 1 and Hb == Wb
+            # shared LPF weights, don't want to save as buffer here
+            self._weight_blur = blur_kernel
+        elif hasattr(blur_kernel, "__call__"):
+            # a way to get a proper reference to the shared buffer
+            # after it has been moved to GPU
+            self._weight_blur_func = blur_kernel
+        else:
+            self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, down=2))
+
+        W_blur = self.weight_blur.size(-1)
+        W_conv = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
+        p = (W_blur - 2) + (W_conv - 1)
+        self.pad0 = (p + 1) // 2
+        self.pad1 = p // 2
+
+    @property
+    def weight_blur(self):
+        if hasattr(self, '_weight_blur_func'):
+            return self._weight_blur_func()
+        return self._weight_blur
+
+    def forward(self, x):
+        x = upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
+        return self.conv(x)

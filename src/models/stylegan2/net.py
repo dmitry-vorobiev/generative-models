@@ -8,9 +8,9 @@ from functools import partial
 from torch import nn, Tensor
 from typing import List, Optional, Tuple
 
-from .layers import AddBias, AddRandomNoise, ConcatMiniBatchStddev, Input, EqualConv2d, \
-    EqualLinear, EqualLeakyReLU, Flatten, Normalize, ConcatLabels
-from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d
+from .layers import AddBias, AddRandomNoise, ConcatMiniBatchStddev, Input, EqualizedLRConv2d, \
+    EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
+from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 
 Latent = Tensor
 Label = Optional[Tensor]
@@ -24,19 +24,24 @@ def _upsample_torch(x, factor):
 
 def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):
     # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
-    return [EqualConv2d(in_ch, out_ch, kernel_size=kernel, padding=(kernel // 2), bias=bias),
-            EqualLeakyReLU(inplace=True)]
+    padding = kernel // 2
+    return [EqualizedLRConv2d(in_ch, out_ch, kernel_size=kernel, padding=padding, bias=bias),
+            EqualizedLRLeakyReLU(inplace=True)]
 
 
-def conv_down_torch(in_ch, out_ch, kernel=3, bias=False):
+def conv_down_torch(in_ch, out_ch, kernel=3, bias=True):
     # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
-    return [EqualConv2d(in_ch, out_ch, kernel_size=kernel, padding=(kernel // 2), bias=bias),
-            nn.AvgPool2d(2)]
+    padding = kernel // 2
+    layers = [EqualizedLRConv2d(in_ch, out_ch, kernel_size=kernel, padding=padding, bias=False),
+              nn.AvgPool2d(2)]
+    if bias:
+        layers.append(AddBias(out_ch))
+    return layers
 
 
 def style_transform(in_features, out_features):
-    # type: (int, int) -> EqualLinear
-    lin = EqualLinear(in_features, out_features, bias=True)
+    # type: (int, int) -> EqualizedLRLinear
+    lin = EqualizedLRLinear(in_features, out_features, bias=True)
     nn.init.ones_(lin.bias)
     return lin
 
@@ -49,7 +54,7 @@ class StyledLayer(nn.Module):
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
                                     upsample_impl=impl, blur_kernel=blur_kernel)
         self.add_noise = AddRandomNoise()
-        self.act_fn = EqualLeakyReLU(inplace=True)
+        self.act_fn = EqualizedLRLeakyReLU(inplace=True)
 
     def forward(self, x: Tensor, w: DLatent) -> Tensor:
         y = self.style(w)
@@ -73,23 +78,32 @@ class ToRGB(nn.Module):
 class FromRGB(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(FromRGB, self).__init__()
-        self.conv = EqualConv2d(in_channels, out_channels, kernel_size=1,
-                                stride=1, padding=0, bias=True)
-        self.act_fn = EqualLeakyReLU(inplace=True)
+        self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size=1, stride=1,
+                                      padding=0, bias=True)
+        self.act_fn = EqualizedLRLeakyReLU(inplace=True)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.act_fn(self.conv(x))
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, impl="torch", blur_kernel=None):
         super(ResidualBlock, self).__init__()
+
+        if impl == "ref":
+            conv_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=3,
+                                             bias=True, blur_kernel=blur_kernel)]
+            skip_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=1,
+                                             bias=False, blur_kernel=blur_kernel)]
+        else:
+            conv_layers = conv_down_torch(in_channels, out_channels, kernel=3, bias=True)
+            skip_layers = conv_down_torch(in_channels, out_channels, kernel=1, bias=False)
+
         self.conv = nn.Sequential(
-            *conv_lrelu(in_channels, in_channels),
-            *conv_down_torch(in_channels, out_channels),
-            AddBias(out_channels),
-            EqualLeakyReLU(inplace=True))
-        self.skip = nn.Sequential(*conv_down_torch(in_channels, out_channels, kernel=1))
+            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True),
+            *conv_layers,
+            EqualizedLRLeakyReLU(inplace=True))
+        self.skip = nn.Sequential(*skip_layers)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv(x) + self.skip(x)
@@ -109,8 +123,8 @@ class MappingNet(nn.Module):
         layers = [Normalize()] if normalize else []
         features = [in_fmaps] + [hidden_dim] * (num_layers - 1) + [style_dim]
         for i in range(num_layers):
-            layers += [EqualLinear(features[i], features[i + 1], lr_mult=lr_mult),
-                       EqualLeakyReLU(inplace=True)]
+            layers += [EqualizedLRLinear(features[i], features[i + 1], lr_mult=lr_mult),
+                       EqualizedLRLeakyReLU(inplace=True)]
         self.mapping = nn.Sequential(*layers)
 
     def forward(self, z: Latent, label: Label = None):
@@ -138,7 +152,7 @@ class SynthesisNet(nn.Module):
         if impl == "ref":
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
-            weight_blur = setup_blur_weights(blur_kernel, 2)
+            weight_blur = setup_blur_weights(blur_kernel, up=2)
             self.register_buffer("weight_blur", weight_blur)
 
             p = weight_blur.size(-1) - 2
@@ -275,9 +289,9 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, img_res=1024, img_channels=3, label_dim=0,
-                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
-                 mbstd_group_size=4, mbstd_num_features=1):
+    def __init__(self, img_res=1024, img_channels=3, label_dim=0, fmap_base=16 << 10,
+                 fmap_decay=1.0, fmap_min=1, fmap_max=512, mbstd_group_size=4,
+                 mbstd_num_features=1, impl="ref", blur_kernel=None):
         super(Discriminator, self).__init__()
 
         if img_res <= 4:
@@ -287,20 +301,32 @@ class Discriminator(nn.Module):
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
 
+        if impl not in ["torch", "ref"]:
+            raise AttributeError("impl should be one of [torch, ref]")
+
+        if impl == "ref":
+            if blur_kernel is None:
+                blur_kernel = [1, 3, 3, 1]
+            weight_blur = setup_blur_weights(blur_kernel, down=2)
+            self.register_buffer("weight_blur", weight_blur)
+        else:
+            self.weight_blur = None
+
         def nf(stage: int):
             fmaps = int(fmap_base / (2.0 ** (stage * fmap_decay)))
             return int(np.clip(fmaps, fmap_min, fmap_max))
 
         inp = FromRGB(img_channels, nf(res_log2 - 1))
-        main = [ResidualBlock(nf(res - 1), nf(res - 2))
+        main = [ResidualBlock(nf(res - 1), nf(res - 2), impl=impl,
+                              blur_kernel=lambda: self.weight_blur)
                 for res in range(res_log2, 2, -1)]
 
         mbstd_ch = mbstd_num_features * int(mbstd_group_size > 1)
         out = [*conv_lrelu(nf(1) + mbstd_ch, nf(1)),
                Flatten(),
-               EqualLinear(nf(1) * 4 ** 2, nf(0), bias=True),
-               EqualLeakyReLU(inplace=True),
-               EqualLinear(nf(0), max(label_dim, 1), bias=True)]
+               EqualizedLRLinear(nf(1) * 4 ** 2, nf(0), bias=True),
+               EqualizedLRLeakyReLU(inplace=True),
+               EqualizedLRLinear(nf(0), max(label_dim, 1), bias=True)]
         if mbstd_ch:
             mbstd = ConcatMiniBatchStddev(mbstd_group_size, mbstd_num_features)
             out = [mbstd] + out
