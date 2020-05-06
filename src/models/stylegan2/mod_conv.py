@@ -101,7 +101,31 @@ def _same(k: Sequence) -> bool:
     return True
 
 
-class ModulatedConv2d(_ConvNd):
+class BlurWeightsMixin(object):
+    def _init_blur_weights(self, blur_kernel, up=0, down=0):
+        if blur_kernel is None:
+            blur_kernel = [1, 3, 3, 1]
+        if isinstance(blur_kernel, torch.Tensor):
+            C1, C0, Hb, Wb = blur_kernel.shape
+            assert C1 == 1 and C0 == 1 and Hb == Wb
+            # shared LPF weights, don't want to save as buffer here
+            self._weight_blur = blur_kernel
+        elif hasattr(blur_kernel, "__call__"):
+            # a way to get a proper reference to the shared buffer
+            # after it has been moved to GPU
+            self._weight_blur_func = blur_kernel
+        else:
+            # noinspection PyUnresolvedReferences
+            self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, up=up, down=down))
+
+    @property
+    def weight_blur(self):
+        if hasattr(self, '_weight_blur_func'):
+            return self._weight_blur_func()
+        return self._weight_blur
+
+
+class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, demodulate=True,
                  upsample=False, upsample_impl="ref", blur_kernel=None,
                  scale_weights=True, lr_mult=1.0):
@@ -128,20 +152,7 @@ class ModulatedConv2d(_ConvNd):
             transposed, _pair(0), groups=1, bias=bias, padding_mode='zeros')
 
         if upsample:
-            if blur_kernel is None:
-                blur_kernel = [1, 3, 3, 1]
-            if isinstance(blur_kernel, torch.Tensor):
-                C1, C0, Hb, Wb = blur_kernel.shape
-                assert C1 == 1 and C0 == 1 and Hb == Wb
-                # shared LPF weights, don't want to save as buffer here
-                self._weight_blur = blur_kernel
-            elif hasattr(blur_kernel, "__call__"):
-                # a way to get a proper reference to the shared buffer
-                # after it has been moved to GPU
-                self._weight_blur_func = blur_kernel
-            else:
-                self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, up=2))
-
+            self._init_blur_weights(blur_kernel, up=2)
             W_blur = self.weight_blur.size(-1)
             W_conv = kernel_size[0]
             p = (W_blur - 2) - (W_conv - 1)
@@ -154,12 +165,6 @@ class ModulatedConv2d(_ConvNd):
                 self._exec = self._upsample_conv2d_torch
         else:
             self._exec = self._conv2d
-
-    @property
-    def weight_blur(self):
-        if hasattr(self, '_weight_blur_func'):
-            return self._weight_blur_func()
-        return self._weight_blur
 
     def reset_parameters(self):
         self.weight_mult = equalized_lr_init(self.weight, self.bias, self.scale_weights,
@@ -220,36 +225,17 @@ class ModulatedConv2d(_ConvNd):
 
 
 # noinspection PyPep8Naming
-class Conv2d_Downsample(nn.Module):
+class Conv2d_Downsample(nn.Module, BlurWeightsMixin):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, blur_kernel=None):
         super(Conv2d_Downsample, self).__init__()
         self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=2, bias=bias)
 
-        if blur_kernel is None:
-            blur_kernel = [1, 3, 3, 1]
-        if isinstance(blur_kernel, torch.Tensor):
-            C1, C0, Hb, Wb = blur_kernel.shape
-            assert C1 == 1 and C0 == 1 and Hb == Wb
-            # shared LPF weights, don't want to save as buffer here
-            self._weight_blur = blur_kernel
-        elif hasattr(blur_kernel, "__call__"):
-            # a way to get a proper reference to the shared buffer
-            # after it has been moved to GPU
-            self._weight_blur_func = blur_kernel
-        else:
-            self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, down=2))
-
+        self._init_blur_weights(blur_kernel, down=2)
         W_blur = self.weight_blur.size(-1)
         W_conv = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
         p = (W_blur - 2) + (W_conv - 1)
         self.pad0 = (p + 1) // 2
         self.pad1 = p // 2
-
-    @property
-    def weight_blur(self):
-        if hasattr(self, '_weight_blur_func'):
-            return self._weight_blur_func()
-        return self._weight_blur
 
     def forward(self, x):
         x = upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
