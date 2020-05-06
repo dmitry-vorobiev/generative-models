@@ -84,8 +84,8 @@ def setup_blur_weights(k: Sequence[int], up=0, down=0) -> Tensor:
     assert not (up and down)
     if k is None:
         k = [1] * (up or down)
-    if not isinstance(k, list):
-        raise AttributeError("blur_kernel must be of type List or None")
+    if not isinstance(k, Sequence):
+        raise AttributeError("blur_kernel must be of type List, Tuple or None")
     k = _setup_kernel(k)
     if up:
         k *= (up ** 2)
@@ -152,14 +152,13 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
             transposed, _pair(0), groups=1, bias=bias, padding_mode='zeros')
 
         if upsample:
-            self._init_blur_weights(blur_kernel, up=2)
-            W_blur = self.weight_blur.size(-1)
-            W_conv = kernel_size[0]
-            p = (W_blur - 2) - (W_conv - 1)
-            self.pad0 = (p + 1) // 2 + 1
-            self.pad1 = p // 2 + 1
-
             if upsample_impl == "ref":
+                self._init_blur_weights(blur_kernel, up=2)
+                W_blur = self.weight_blur.size(-1)
+                W_conv = kernel_size[0]
+                p = (W_blur - 2) - (W_conv - 1)
+                self.pad0 = (p + 1) // 2 + 1
+                self.pad1 = p // 2 + 1
                 self._exec = self._upsample_conv2d_ref
             else:
                 self._exec = self._upsample_conv2d_torch

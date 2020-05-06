@@ -48,7 +48,7 @@ def style_transform(in_features, out_features):
 
 class StyledLayer(nn.Module):
     def __init__(self, in_channels, out_channels, style_dim, upsample=False,
-                 impl="torch", blur_kernel=None):
+                 impl="ref", blur_kernel=None):
         super(StyledLayer, self).__init__()
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
@@ -87,7 +87,7 @@ class FromRGB(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, impl="torch", blur_kernel=None):
+    def __init__(self, in_channels, out_channels, impl="ref", blur_kernel=None):
         super(ResidualBlock, self).__init__()
 
         if impl == "ref":
@@ -211,7 +211,8 @@ class Generator(nn.Module):
     def __init__(self, img_res=1024, img_channels=3, latent_dim=512, label_dim=0, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
                  num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
-                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None):
+                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None,
+                 impl="ref"):
         super(Generator, self).__init__()
         if w_ema_decay >= 1.0 or w_ema_decay <= 0.0:
             w_ema_decay = None
@@ -228,7 +229,7 @@ class Generator(nn.Module):
             hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize=normalize_latent)
 
         self.synthesis = SynthesisNet(
-            img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max)
+            img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max, impl)
 
         self.p_style_mix = p_style_mix
 
