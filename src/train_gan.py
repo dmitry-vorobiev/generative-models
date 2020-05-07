@@ -155,8 +155,17 @@ def run(conf: DictConfig):
     D_loss = instantiate(conf.loss.D).to(device)
     G_opt = instantiate(conf.optim.G, G.parameters())
     D_opt = instantiate(conf.optim.D, D.parameters())
+    G_ema = None
 
-    train_loop = create_train_loop(G, D, G_loss, D_loss, G_opt, D_opt, 0, device)
+    if conf.train.G_ema and rank == 0:
+        G_ema = instantiate(conf.model.G)
+        if not conf.train.G_ema_on_cpu:
+            G_ema = G_ema.to(device)
+        G_ema.load_state_dict(G.state_dict())
+        G_ema.requires_grad_(False)
+
+    train_loop = create_train_loop(G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device,
+                                   options=dict(conf.train.options))
     trainer = create_trainer(train_loop, metrics, device)
 
     every_iteration = Events.ITERATION_COMPLETED
@@ -171,6 +180,7 @@ def run(conf: DictConfig):
         'D_loss': D_loss,
         'G_opt': G_opt,
         'D_opt': D_opt,
+        'G_ema': G_ema
     }
     save_path = cp.get('base_dir', os.getcwd())
     pbar = None

@@ -3,14 +3,27 @@ import torch.nn.functional as F
 
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from .net import Discriminator, Generator
 from my_types import Device, DLossFunc, FloatDict, GLossFunc, TrainFunc
 
+Options = Optional[Mapping[str, Any]]
 
-def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=-1, device=None):
-    # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, int, Device) -> TrainFunc
+
+# TODO: how to properly handle buffers?
+def ema_step(G, G_ema, decay=0.001):
+    # type: (Generator, Generator, float) -> None
+    curr_state = dict(G.named_parameters(recurse=True))
+    with torch.no_grad():
+        for name, param in G_ema.named_parameters(recurse=True):
+            curr_value = curr_state[name].to(param.device)
+            param.lerp_(curr_value, decay)
+
+
+def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None, device=None,
+                      options=None):
+    # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, Optional[Generator], Device, Options) -> TrainFunc
 
     def _sample_latent(batch_size: int) -> Tensor:
         return torch.randn(batch_size, G.latent_dim, device=device)
@@ -26,12 +39,16 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
             return None
         return F.one_hot(y, num_classes=num_classes)
 
+    options = options or dict()
+    num_classes = options.get('num_classes', -1)
+    ema_decay = options.get('G_ema_decay', 0.999)
+    ema_decay = 1 - ema_decay
     stats = dict()
 
-    def _loop(image: Tensor, label=None) -> FloatDict:
+    def _loop(image, label=None):
+        # type: (Tensor, Optional[Tensor]) -> FloatDict
         G.train()
         D.train()
-
         N = image.size(0)
 
         # Training generator
@@ -45,6 +62,10 @@ def create_train_loop(G, D, G_loss_func, D_loss_func, G_opt, D_opt, num_classes=
         g_loss.backward()
         G_opt.step()
         del z, fake_label
+
+        # Average G weights
+        if G_ema is not None:
+            ema_step(G, G_ema, ema_decay)
 
         # Training discriminator
         G.requires_grad_(False)

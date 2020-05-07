@@ -54,29 +54,37 @@ loss:
     class: models.stylegan2.loss.D_LogisticLoss_R1
     params:
       r1_freq: 16
+      r1_gamma: 100
 
 optim:
   G:
     class: torch.optim.Adam
     params:
-      lr: 0.001
-      betas: [0.0, 0.999]
+      lr: 0.002
+      betas: [0.0, 0.99]
+      eps: 1e-8
   D:
     class: torch.optim.Adam
     params:
-      lr: 0.001
-      betas: [0.0, 0.999]
+      lr: 0.002
+      betas: [0.0, 0.99]
+      eps: 1e-8
 
 train:
   skip: false
   epochs: 100
-  epoch_length: 16000
+  epoch_length: 300
   checkpoints:
     load: null
     base_dir: null
     interval_epoch: 1
     interval_iteration: 500
     max_checkpoints: 100
+  G_ema: true
+  G_ema_on_cpu: false
+  options:
+    num_classes: 0
+    G_ema_decay: 0.99778
 
 logging:
   model: false
