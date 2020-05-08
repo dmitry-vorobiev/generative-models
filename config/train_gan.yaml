@@ -73,7 +73,7 @@ optim:
 train:
   skip: false
   epochs: 100
-  epoch_length: 300
+  epoch_length: -1
   checkpoints:
     load: null
     save_dir: null
@@ -89,7 +89,7 @@ train:
     enabled: true
     save_dir: null
     num_images: 32
-    interval_iteration: 3
+    interval_iteration: 100
 
 logging:
   model: false

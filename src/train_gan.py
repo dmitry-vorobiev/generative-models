@@ -38,9 +38,7 @@ def log_iter(engine: Engine, trainer: Engine, pbar: ProgressBar, log_interval: i
     epoch = trainer.state.epoch
     iteration = engine.state.iteration
     metrics = engine.state.metrics
-    stats = {k: '%.3f' % v for k, v in metrics.items() if 'loss' in k}
-    if hasattr(engine.state, 'lr'):
-        stats['lr'] = ', '.join(['%.1e' % val for val in engine.state.lr])
+    stats = {k: '%.3f' % v for k, v in metrics.items()}
     stats = ', '.join(['{}: {}'.format(*e) for e in stats.items()])
     t0 = engine.state.t0
     t1 = time.time()
@@ -54,7 +52,7 @@ def log_iter(engine: Engine, trainer: Engine, pbar: ProgressBar, log_interval: i
 def log_epoch(engine: Engine) -> None:
     epoch = engine.state.epoch
     metrics = engine.state.metrics
-    stats = {k: '%.3f' % metrics[k] for k in ['acc', 'nll']}
+    stats = {k: '%.3f' % v for k, v in metrics.items()}
     stats = ', '.join(['{}: {}'.format(*e) for e in stats.items()])
     logging.info("ep: {}, {}".format(epoch, stats))
 
@@ -245,7 +243,7 @@ def run(conf: DictConfig):
         trainer.run(train_dl, max_epochs=epochs, epoch_length=epoch_length)
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        logging.error(traceback.format_exc())
     if pbar is not None:
         pbar.close()
 
