@@ -5,8 +5,9 @@ import os
 import time
 import torch
 import torch.distributed as dist
+import torchvision
 
-from collections import OrderedDict
+from functools import partial
 from hydra.utils import instantiate
 from ignite.contrib.handlers import ProgressBar
 from ignite.engine import Engine, Events
@@ -19,8 +20,8 @@ from torchvision import transforms as T
 from typing import Any, Dict, List, Optional, Tuple, Sized
 
 from data.dataset import JustImages
-from models.stylegan2.train import create_train_loop
-from my_types import Batch, Device, FloatDict, TrainFunc
+from models.stylegan2.train import create_train_closures
+from my_types import Batch, Device, FloatDict, SnapshotFunc, TrainFunc
 
 Metrics = Dict[str, Metric]
 
@@ -62,6 +63,7 @@ def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, dev
     def _update(e: Engine, batch: Batch) -> FloatDict:
         iteration = e.state.iteration
         # batch = _prepare_batch(batch, device, non_blocking=True)
+        # TODO: fix passing tuples
         loss = train_func(batch)
         return loss
 
@@ -110,6 +112,22 @@ def create_train_loader(conf: DictConfig, epoch_length=-1, rank: Optional[int] =
     loader = DataLoader(data, sampler=sampler, batch_size=conf.loader.batch_size,
                         num_workers=conf.get('loader.workers', 0), drop_last=True)
     return loader
+
+
+def handle_snapshot_images(engine: Engine, make_snapshot: SnapshotFunc, save_dir: str):
+    images = make_snapshot()
+    path = os.path.join(save_dir, '%06d.png' % engine.state.iteration)
+    torchvision.utils.save_image(images, path)
+
+
+def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):
+    snapshots = conf.train.snapshots
+    if snapshots.enabled:
+        snap_event = Events.ITERATION_COMPLETED(every=snapshots.interval_iteration)
+        snap_path = snapshots.get('save_dir', os.path.join(os.getcwd(), 'images'))
+        if not os.path.exists(snap_path):
+            os.makedirs(snap_path)
+        trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
 
 
 def run(conf: DictConfig):
@@ -164,8 +182,12 @@ def run(conf: DictConfig):
         G_ema.load_state_dict(G.state_dict())
         G_ema.requires_grad_(False)
 
-    train_loop = create_train_loop(G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device,
-                                   options=dict(conf.train.options))
+    train_options = {
+        'train':    dict(conf.train.options),
+        'snapshot': dict(conf.train.snapshots)
+    }
+    train_loop, make_snapshot = create_train_closures(
+        G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
     trainer = create_trainer(train_loop, metrics, device)
 
     every_iteration = Events.ITERATION_COMPLETED
@@ -182,7 +204,7 @@ def run(conf: DictConfig):
         'D_opt': D_opt,
         'G_ema': G_ema
     }
-    save_path = cp.get('base_dir', os.getcwd())
+    save_path = cp.get('save_dir', os.getcwd())
     pbar = None
 
     if rank == 0:
@@ -212,6 +234,8 @@ def run(conf: DictConfig):
             if cp_iter < 1 or epoch_length % cp_iter:
                 save_event = Events.EPOCH_COMPLETED(every=cp_epoch)
                 trainer.add_event_handler(save_event, make_checkpoint)
+
+        setup_snapshots(trainer, make_snapshot, conf)
 
     if 'load' in cp.keys() and cp.load:
         Checkpoint.load_objects(to_load=to_save,

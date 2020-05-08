@@ -63,7 +63,7 @@ class JustImages(VisionDataset):
         self.extensions = extensions
         self.samples = samples
 
-    def __getitem__(self, index: int) -> Tuple[Tensor, None]:
+    def __getitem__(self, index: int) -> Tensor:
         path = self.samples[index]
         sample = self.loader(path)
         if self.transform is not None:

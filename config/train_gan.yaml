@@ -76,7 +76,7 @@ train:
   epoch_length: 300
   checkpoints:
     load: null
-    base_dir: null
+    save_dir: null
     interval_epoch: 1
     interval_iteration: 500
     max_checkpoints: 100
@@ -85,6 +85,11 @@ train:
   options:
     num_classes: 0
     G_ema_decay: 0.99778
+  snapshots:
+    enabled: true
+    save_dir: null
+    num_images: 32
+    interval_iteration: 3
 
 logging:
   model: false
