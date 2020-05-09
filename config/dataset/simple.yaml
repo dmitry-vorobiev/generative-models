@@ -1,0 +1,10 @@
+data:
+  type: simple
+  transforms:
+    to_tensor:
+      class: torchvision.transforms.ToTensor
+    normalize:
+      class: torchvision.transforms.Normalize
+      params:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]

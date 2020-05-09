@@ -6,6 +6,9 @@ hydra:
       file:
         filename: ${hydra.job.name}_${distributed.local_rank}.log
 
+defaults:
+  - dataset: simple
+
 general:
   gpu: 1
   seed: 333

@@ -15,6 +15,7 @@ from ignite.handlers import Checkpoint, DiskSaver, TerminateOnNan
 from ignite.metrics import Metric, RunningAverage
 from ignite.utils import convert_tensor
 from omegaconf import DictConfig
+from torch import Tensor
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms as T
 from typing import Any, Dict, List, Optional, Tuple, Sized
@@ -59,10 +60,9 @@ def log_epoch(engine: Engine) -> None:
 
 def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, device=None):
     def _update(e: Engine, batch: Batch) -> FloatDict:
-        iteration = e.state.iteration
+        # iteration = e.state.iteration
         # batch = _prepare_batch(batch, device, non_blocking=True)
-        # TODO: fix passing tuples
-        loss = train_func(batch)
+        loss = train_func(*batch)
         return loss
 
     trainer = Engine(_update)
@@ -96,19 +96,52 @@ def _upd_pbar_iter_from_cp(engine: Engine, pbar: ProgressBar) -> None:
     pbar.n = engine.state.iteration
 
 
-def create_train_loader(conf: DictConfig, epoch_length=-1, rank: Optional[int] = None,
-                        num_replicas: Optional[int] = None) -> Sized:
-    transforms = T.Compose([
-        T.ToTensor(),
-        T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
-    data = JustImages(conf.root, extensions=tuple(conf.extensions), transform=transforms)
+def create_simple_dataset(conf, transforms):
+    # type: (DictConfig, DictConfig) -> JustImages
+    transforms = T.Compose([instantiate(v) for k, v in transforms.items()])
+    ds = JustImages(conf.root, extensions=tuple(conf.extensions), transform=transforms)
+    return ds
+
+
+def add_empty_labels(batch):
+    # type: (List[Tensor]) -> Tuple[Tensor, None]
+    """
+    Copy-paste from torch/utils/data/_utils/collate.py default_collate
+    """
+    elem = batch[0]
+    assert isinstance(elem, torch.Tensor)
+    out = None
+    if torch.utils.data.get_worker_info() is not None:
+        # If we're in a background process, concatenate directly into a
+        # shared memory tensor to avoid an extra copy
+        numel = sum([x.numel() for x in batch])
+        storage = elem.storage()._new_shared(numel)
+        out = elem.new(storage)
+    return torch.stack(batch, 0, out=out), None
+
+
+def create_train_loader(conf, rank=None, num_replicas=None):
+    # type: (DictConfig, Optional[int], Optional[int]) -> Sized
+    build_ds = {
+        'simple': create_simple_dataset
+    }
+    collate_funcs = {
+        'simple': add_empty_labels,
+    }
+    ds_type = conf.type
+    data = build_ds[ds_type](conf, conf.transforms)
     print("Found {} images".format(len(data)))
+
     sampler = None
     if num_replicas is not None:
         sampler = DistributedSampler(data, num_replicas=num_replicas, rank=rank)
-    loader = DataLoader(data, sampler=sampler, batch_size=conf.loader.batch_size,
-                        num_workers=conf.get('loader.workers', 0), drop_last=True)
+
+    loader = DataLoader(data,
+                        sampler=sampler,
+                        collate_fn=collate_funcs[ds_type],
+                        batch_size=conf.loader.batch_size,
+                        num_workers=conf.get('loader.workers', 0),
+                        drop_last=True)
     return loader
 
 
@@ -147,17 +180,15 @@ def run(conf: DictConfig):
         num_replicas = 1
         torch.cuda.set_device(conf.general.gpu)
     device = torch.device('cuda')
+    loader_args = dict()
 
     if rank == 0:
         print(conf.pretty())
-
     if num_replicas > 1:
         epoch_length = epoch_length // num_replicas
         loader_args = dict(rank=rank, num_replicas=num_replicas)
-    else:
-        loader_args = dict()
 
-    train_dl = create_train_loader(conf.data, epoch_length=epoch_length, **loader_args)
+    train_dl = create_train_loader(conf.data, **loader_args)
 
     if epoch_length < 1:
         epoch_length = len(train_dl)
