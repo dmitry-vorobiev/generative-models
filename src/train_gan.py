@@ -58,11 +58,12 @@ def log_epoch(engine: Engine) -> None:
     logging.info("ep: {}, {}".format(epoch, stats))
 
 
-def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, device=None):
+def create_trainer(train_func, metrics=None, device=None):
+    # type: (TrainFunc, Optional[Metrics], Device) -> Engine
+
     def _update(e: Engine, batch: Batch) -> FloatDict:
-        # iteration = e.state.iteration
-        # batch = _prepare_batch(batch, device, non_blocking=True)
-        loss = train_func(*batch)
+        iteration = e.state.iteration - 1  # it starts from 1
+        loss = train_func(iteration, *batch)
         return loss
 
     trainer = Engine(_update)
@@ -72,8 +73,7 @@ def create_trainer(train_func: TrainFunc, metrics: Optional[Metrics] = None, dev
     return trainer
 
 
-def _prepare_batch(batch: Batch, device: torch.device,
-                   non_blocking: bool) -> Tuple[Any, Any]:
+def _prepare_batch(batch: Batch, device: torch.device, non_blocking: bool) -> Tuple[Any, Any]:
     if isinstance(batch, tuple):
         x, y = batch
         return (convert_tensor(x, device=device, non_blocking=non_blocking),
@@ -103,7 +103,7 @@ def create_simple_dataset(conf, transforms):
     return ds
 
 
-def add_empty_labels(batch):
+def default_collate_no_labels(batch):
     # type: (List[Tensor]) -> Tuple[Tensor, None]
     """
     Copy-paste from torch/utils/data/_utils/collate.py default_collate
@@ -126,7 +126,7 @@ def create_train_loader(conf, rank=None, num_replicas=None):
         'simple': create_simple_dataset
     }
     collate_funcs = {
-        'simple': add_empty_labels,
+        'simple': default_collate_no_labels,
     }
     ds_type = conf.type
     data = build_ds[ds_type](conf, conf.transforms)
@@ -215,6 +215,12 @@ def run(conf: DictConfig):
         'train':    dict(conf.train.options),
         'snapshot': dict(conf.train.snapshots)
     }
+    bs_dl = conf.data.loader.batch_size
+    bs_eff = conf.train.options.batch_size
+    if bs_eff % bs_dl:
+        raise AttributeError("Effective batch size should be divisible by data-loader batch size")
+    train_options['train']['update_interval'] = bs_eff // bs_dl
+
     train_loop, make_snapshot = create_train_closures(
         G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
     trainer = create_trainer(train_loop, metrics, device)

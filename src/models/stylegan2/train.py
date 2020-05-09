@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn.functional as F
 
@@ -44,32 +45,34 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         snap_fakes, _ = G(fixed_z, fixed_label)
         return snap_fakes
 
-    def _loop(image, label=None):
-        # type: (Tensor, Optional[Tensor]) -> FloatDict
+    def _loop(iteration, image, label=None):
+        # type: (int, Tensor, Optional[Tensor]) -> FloatDict
         G.train()
         D.train()
         N = image.size(0)
 
-        # Training generator
-        G.requires_grad_(True)
-        D.requires_grad_(False)
-        G_opt.zero_grad()
+        if not iteration % rounds:
+            # Training generator
+            G.requires_grad_(True)
+            D.requires_grad_(False)
+            G_opt.zero_grad()
+            for _ in range(rounds):
+                z = _sample_latent(N)
+                fake_label = _sample_rand_label(N)
+                g_loss, g_stats = G_loss_func(G, D, z, fake_label, stats)
+                g_loss.backward()
+            G_opt.step()
+            del z, fake_label
 
-        z = _sample_latent(N)
-        fake_label = _sample_rand_label(N)
-        g_loss, g_stats = G_loss_func(G, D, z, fake_label, stats)
-        g_loss.backward()
-        G_opt.step()
-        del z, fake_label
-
-        # Average G weights
-        if G_ema is not None:
-            ema_step(G, G_ema, ema_decay)
+            # Average G weights
+            if G_ema is not None:
+                ema_step(G, G_ema, ema_decay)
 
         # Training discriminator
-        G.requires_grad_(False)
-        D.requires_grad_(True)
-        D_opt.zero_grad()
+        if not iteration % rounds:
+            G.requires_grad_(False)
+            D.requires_grad_(True)
+            D_opt.zero_grad()
 
         image = image.to(device)
         if label is not None:
@@ -79,7 +82,8 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         label = _ohe(label)
         d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
         d_loss.backward()
-        D_opt.step()
+        if not (iteration + 1) % rounds:
+            D_opt.step()
 
         return stats
 
@@ -88,6 +92,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
     num_classes = train_opts.get("num_classes", -1)
     ema_decay = train_opts.get("G_ema_decay", 0.999)
     ema_decay = 1 - ema_decay
+    rounds = train_opts['update_interval']
 
     snap_opts = options['snapshot']
     N_snap = snap_opts.get("num_images", 16)

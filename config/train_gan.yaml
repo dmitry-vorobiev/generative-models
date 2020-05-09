@@ -88,6 +88,7 @@ train:
   options:
     num_classes: 0
     G_ema_decay: 0.99778
+    batch_size: 32                  # the effective batch size for gradient accumulation
   snapshots:
     enabled: true
     save_dir: null
