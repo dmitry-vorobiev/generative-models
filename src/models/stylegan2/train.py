@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+from functools import partial
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from typing import Any, Mapping, Optional, Tuple
@@ -21,23 +22,20 @@ def ema_step(G, G_ema, decay=0.001):
             param.lerp_(curr_value, decay)
 
 
-def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None,
-                          device=None, options=None):
+def sample_latent(batch_size, dim, device=None):
+    # type: (int, int, Device) -> Tensor
+    return torch.randn(batch_size, dim, device=device)
+
+
+def sample_rand_label(batch_size, num_classes, device=None):
+    # type: (int, int, Device) -> Optional[Tensor]
+    y = torch.randint(num_classes, (batch_size,), device=device)
+    return F.one_hot(y, num_classes=num_classes)
+
+
+def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None, device=None,
+                          options=None):
     # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, Optional[Generator], Device, Options) -> Tuple[TrainFunc, SnapshotFunc]
-
-    def _sample_latent(batch_size: int, dim: int, device=device) -> Tensor:
-        return torch.randn(batch_size, dim, device=device)
-
-    def _sample_rand_label(batch_size: int, device=device) -> Optional[Tensor]:
-        if num_classes < 2:
-            return None
-        y = torch.randint(num_classes, (batch_size,), device=device)
-        return F.one_hot(y, num_classes=num_classes)
-
-    def _ohe(y: Optional[Tensor]) -> Optional[Tensor]:
-        if y is None:
-            return None
-        return F.one_hot(y, num_classes=num_classes)
 
     def _make_snapshot() -> Tensor:
         G_ema.eval()
@@ -56,8 +54,8 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
             D.requires_grad_(False)
             G_opt.zero_grad()
             for _ in range(rounds):
-                z = _sample_latent(N, latent_dim)
-                fake_label = _sample_rand_label(N)
+                z = _sample_z(N)
+                fake_label = _sample_label(N)
                 g_loss, g_stats = G_loss_func(G, D, z, fake_label, stats)
                 g_loss.backward()
             G_opt.step()
@@ -76,11 +74,12 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         image = image.to(device)
         if label is not None:
             label = label.to(device)
+            label = F.one_hot(label, num_classes=num_classes)
 
-        z = _sample_latent(N, latent_dim)
-        label = _ohe(label)
+        z = _sample_z(N)
         d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
         d_loss.backward()
+
         if not (iteration + 1) % rounds:
             D_opt.step()
 
@@ -95,14 +94,22 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
     G_ = G.module if hasattr(G, 'module') else G
     latent_dim = G_.latent_dim
+    _sample_z = partial(sample_latent, dim=latent_dim, device=device)
+
+    def _sample_label(*args): return None
+    if num_classes > 1:
+        _sample_label = partial(sample_rand_label, num_classes=num_classes, device=device)
 
     snap_opts = options['snapshot']
     N_snap = snap_opts.get("num_images", 16)
     fixed_z, fixed_label = None, None
+
     if snap_opts['enabled'] and G_ema is not None:
         G_ema_device = next(G_ema.parameters()).device
-        fixed_z = _sample_latent(N_snap, latent_dim, device=G_ema_device)
-        fixed_label = _sample_rand_label(N_snap, device=G_ema_device)
+        fixed_z = sample_latent(N_snap, latent_dim, G_ema_device)
+        fixed_label = None
+        if num_classes > 1:
+            fixed_label = sample_rand_label(N_snap, num_classes, G_ema_device)
 
     stats = dict()
     return _loop, _make_snapshot
