@@ -22,7 +22,7 @@ data:
   extensions:
     - png
   loader:
-    # bs per each device
+    # batch size per each device
     batch_size: 32
     workers: 2
 

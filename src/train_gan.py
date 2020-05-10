@@ -159,10 +159,30 @@ def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConf
             snap_path = snapshots.get('save_dir', os.path.join(os.getcwd(), 'images'))
             if not os.path.exists(snap_path):
                 os.makedirs(snap_path)
+            logging.info("Saving snapshot images to {}".format(snap_path))
             trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
         else:
             logging.warning("Snapshot generation requires train.G_ema=true. "
                             "Snapshots will be turned off for this run.")
+
+
+def setup_checkpoints(trainer, obj_to_save, epoch_length, conf):
+    # type: (Engine, Dict[str, Any], int, DictConfig) -> None
+    cp = conf.checkpoints
+    save_path = cp.get('save_dir', os.getcwd())
+    logging.info("Saving checkpoints to {}".format(save_path))
+    max_cp = max(int(cp.get('max_checkpoints', 1)), 1)
+    save = DiskSaver(save_path, create_dir=True, require_empty=True)
+    make_checkpoint = Checkpoint(obj_to_save, save, n_saved=max_cp)
+    cp_iter = cp.interval_iteration
+    cp_epoch = cp.interval_epoch
+    if cp_iter > 0:
+        save_event = Events.ITERATION_COMPLETED(every=cp_iter)
+        trainer.add_event_handler(save_event, make_checkpoint)
+    if cp_epoch > 0:
+        if cp_iter < 1 or epoch_length % cp_iter:
+            save_event = Events.EPOCH_COMPLETED(every=cp_epoch)
+            trainer.add_event_handler(save_event, make_checkpoint)
 
 
 def run(conf: DictConfig, local_rank=0):
@@ -184,8 +204,9 @@ def run(conf: DictConfig, local_rank=0):
         torch.cuda.set_device(conf.general.gpu)
     device = torch.device('cuda')
     loader_args = dict()
+    master_node = rank == 0
 
-    if rank == 0 or True:
+    if master_node:
         print(conf.pretty())
     if num_replicas > 1:
         epoch_length = epoch_length // num_replicas
@@ -207,7 +228,7 @@ def run(conf: DictConfig, local_rank=0):
     D_opt = instantiate(conf.optim.D, D.parameters())
     G_ema = None
 
-    if conf.train.G_ema and rank == 0:
+    if conf.train.G_ema and master_node:
         G_ema = instantiate(conf.model.G)
         if not conf.train.G_ema_on_cpu:
             G_ema = G_ema.to(device)
@@ -224,6 +245,10 @@ def run(conf: DictConfig, local_rank=0):
         'G_ema': G_ema
     }
 
+    if master_node and conf.logging.model:
+        logging.info(G)
+        logging.info(D)
+
     if distributed:
         ddp_kwargs = dict(device_ids=[local_rank, ], output_device=local_rank)
         G = torch.nn.parallel.DistributedDataParallel(G, **ddp_kwargs)
@@ -239,7 +264,6 @@ def run(conf: DictConfig, local_rank=0):
         raise AttributeError("Effective batch size should be divisible by data-loader batch size "
                              "multiplied by number of devices in use")  # until there is no special bs for master node...
     upd_interval = max(bs_eff // bs_dl, 1)
-    epoch_length *= upd_interval
     train_options['train']['update_interval'] = upd_interval
 
     train_loop, make_snapshot = create_train_closures(
@@ -253,38 +277,21 @@ def run(conf: DictConfig, local_rank=0):
     cp = conf.checkpoints
     pbar = None
 
-    if rank == 0:
+    if master_node:
         log_freq = conf.logging.iter_freq
         log_event = Events.ITERATION_COMPLETED(every=log_freq)
         pbar = ProgressBar(persist=False)
-
         trainer.add_event_handler(Events.EPOCH_STARTED, on_epoch_start)
         trainer.add_event_handler(log_event, log_iter, trainer, pbar, log_freq)
         trainer.add_event_handler(Events.EPOCH_COMPLETED, log_epoch)
         pbar.attach(trainer, metric_names=metric_names)
-
-        if 'load' in cp.keys() and cp.load:
-            logging.info("Resume from a checkpoint: {}".format(cp.load))
-            trainer.add_event_handler(Events.STARTED, _upd_pbar_iter_from_cp, pbar)
-
-        save_path = cp.get('save_dir', os.getcwd())
-        logging.info("Saving checkpoints to {}".format(save_path))
-        max_cp = max(int(cp.get('max_checkpoints', 1)), 1)
-        save = DiskSaver(save_path, create_dir=True, require_empty=True)
-        make_checkpoint = Checkpoint(to_save, save, n_saved=max_cp)
-        cp_iter = cp.interval_iteration
-        cp_epoch = cp.interval_epoch
-        if cp_iter > 0:
-            save_event = Events.ITERATION_COMPLETED(every=cp_iter)
-            trainer.add_event_handler(save_event, make_checkpoint)
-        if cp_epoch > 0:
-            if cp_iter < 1 or epoch_length % cp_iter:
-                save_event = Events.EPOCH_COMPLETED(every=cp_epoch)
-                trainer.add_event_handler(save_event, make_checkpoint)
-
+        setup_checkpoints(trainer, to_save, epoch_length, conf)
         setup_snapshots(trainer, make_snapshot, conf)
 
-    if 'load' in cp.keys() and cp.load:
+    if 'load' in cp.keys() and cp.load is not None:
+        if master_node:
+            logging.info("Resume from a checkpoint: {}".format(cp.load))
+            trainer.add_event_handler(Events.STARTED, _upd_pbar_iter_from_cp, pbar)
         Checkpoint.load_objects(to_load=to_save,
                                 checkpoint=torch.load(cp.load, map_location=device))
 
