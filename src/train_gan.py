@@ -151,7 +151,7 @@ def handle_snapshot_images(engine: Engine, make_snapshot: SnapshotFunc, save_dir
 
 
 def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):
-    snapshots = conf.train.snapshots
+    snapshots = conf.snapshots
     use_ema = conf.train.G_ema
     if snapshots.enabled:
         if use_ema:
@@ -230,14 +230,15 @@ def run(conf: DictConfig, local_rank=0):
         D = torch.nn.parallel.DistributedDataParallel(D, **ddp_kwargs)
 
     train_options = {
-        'train':    dict(conf.train.options),
-        'snapshot': dict(conf.train.snapshots)
+        'train':    dict(conf.train),
+        'snapshot': dict(conf.snapshots)
     }
-    bs_dl = conf.data.loader.batch_size
-    bs_eff = conf.train.options.batch_size
+    bs_dl = int(conf.data.loader.batch_size) * num_replicas
+    bs_eff = conf.train.batch_size
     if bs_eff % bs_dl:
-        raise AttributeError("Effective batch size should be divisible by data-loader batch size")
-    upd_interval = bs_eff // bs_dl
+        raise AttributeError("Effective batch size should be divisible by data-loader batch size "
+                             "multiplied by number of devices in use")  # until there is no special bs for master node...
+    upd_interval = max(bs_eff // bs_dl, 1)
     epoch_length *= upd_interval
     train_options['train']['update_interval'] = upd_interval
 
@@ -249,7 +250,7 @@ def run(conf: DictConfig, local_rank=0):
     every_iteration = Events.ITERATION_COMPLETED
     trainer.add_event_handler(every_iteration, TerminateOnNan())
 
-    cp = conf.train.checkpoints
+    cp = conf.checkpoints
     pbar = None
 
     if rank == 0:

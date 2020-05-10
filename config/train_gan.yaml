@@ -22,6 +22,7 @@ data:
   extensions:
     - png
   loader:
+    # bs per each device
     batch_size: 32
     workers: 2
 
@@ -76,23 +77,19 @@ train:
   skip: false
   epochs: 100
   epoch_length: -1
-  checkpoints:
-    load: null
-    save_dir: null
-    interval_epoch: 1
-    interval_iteration: 500
-    max_checkpoints: 100
   G_ema: true
   G_ema_on_cpu: false
-  options:
-    num_classes: 0
-    G_ema_decay: 0.99778
-    batch_size: 32                  # the effective batch size for gradient accumulation
-  snapshots:
-    enabled: true
-    save_dir: null
-    num_images: 32
-    interval_iteration: 100
+  G_ema_decay: 0.99778
+  num_classes: 0
+  # the effective batch size for gradient accumulation
+  batch_size: 32
+
+checkpoints:
+  load: null
+  save_dir: null
+  interval_epoch: 1
+  interval_iteration: 500
+  max_checkpoints: 100
 
 logging:
   model: false
@@ -105,3 +102,9 @@ logging:
     - D_fake
     - D_loss
     - D_r1
+
+snapshots:
+  enabled: true
+  save_dir: null
+  num_images: 32
+  interval_iteration: 100
