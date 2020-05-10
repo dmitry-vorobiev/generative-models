@@ -152,12 +152,17 @@ def handle_snapshot_images(engine: Engine, make_snapshot: SnapshotFunc, save_dir
 
 def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):
     snapshots = conf.train.snapshots
+    use_ema = conf.train.G_ema
     if snapshots.enabled:
-        snap_event = Events.ITERATION_COMPLETED(every=snapshots.interval_iteration)
-        snap_path = snapshots.get('save_dir', os.path.join(os.getcwd(), 'images'))
-        if not os.path.exists(snap_path):
-            os.makedirs(snap_path)
-        trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
+        if use_ema:
+            snap_event = Events.ITERATION_COMPLETED(every=snapshots.interval_iteration)
+            snap_path = snapshots.get('save_dir', os.path.join(os.getcwd(), 'images'))
+            if not os.path.exists(snap_path):
+                os.makedirs(snap_path)
+            trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
+        else:
+            logging.warning("Snapshot generation requires train.G_ema=true. "
+                            "Snapshots will be turned off for this run.")
 
 
 def run(conf: DictConfig, local_rank=0):
