@@ -1,10 +1,10 @@
-import math
 import torch
 import torch.nn.functional as F
 
 from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel
 from torch.optim.optimizer import Optimizer
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple, Union
 
 from .net import Discriminator, Generator
 from my_types import Device, DLossFunc, FloatDict, GLossFunc, SnapshotFunc, TrainFunc
@@ -15,19 +15,27 @@ Options = Optional[Mapping[str, Any]]
 # TODO: how to properly handle buffers?
 def ema_step(G, G_ema, decay=0.001):
     # type: (Generator, Generator, float) -> None
-    curr_state = dict(G.named_parameters(recurse=True))
+    _G = G.module if hasattr(G, 'module') else G
+    curr_state = dict(_G.named_parameters(recurse=True))
     with torch.no_grad():
         for name, param in G_ema.named_parameters(recurse=True):
             curr_value = curr_state[name].to(param.device)
             param.lerp_(curr_value, decay)
 
 
+def _get_attr(G, item):
+    # type: (Union[Generator, DistributedDataParallel], str) -> Any
+    if isinstance(G, DistributedDataParallel):
+        return getattr(G.module, item)
+    return getattr(G, item)
+
+
 def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None,
                           device=None, options=None):
     # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, Optional[Generator], Device, Options) -> Tuple[TrainFunc, SnapshotFunc]
 
-    def _sample_latent(batch_size: int) -> Tensor:
-        return torch.randn(batch_size, G.latent_dim, device=device)
+    def _sample_latent(batch_size: int, dim: int) -> Tensor:
+        return torch.randn(batch_size, dim, device=device)
 
     def _sample_rand_label(batch_size: int) -> Optional[Tensor]:
         if num_classes < 2:
@@ -57,7 +65,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
             D.requires_grad_(False)
             G_opt.zero_grad()
             for _ in range(rounds):
-                z = _sample_latent(N)
+                z = _sample_latent(N, latent_dim)
                 fake_label = _sample_rand_label(N)
                 g_loss, g_stats = G_loss_func(G, D, z, fake_label, stats)
                 g_loss.backward()
@@ -78,7 +86,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         if label is not None:
             label = label.to(device)
 
-        z = _sample_latent(N)
+        z = _sample_latent(N, latent_dim)
         label = _ohe(label)
         d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
         d_loss.backward()
@@ -93,12 +101,13 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
     ema_decay = train_opts.get("G_ema_decay", 0.999)
     ema_decay = 1 - ema_decay
     rounds = train_opts['update_interval']
+    latent_dim = _get_attr(G, 'latent_dim')
 
     snap_opts = options['snapshot']
     N_snap = snap_opts.get("num_images", 16)
     fixed_z, fixed_label = None, None
     if snap_opts['enabled']:
-        fixed_z = _sample_latent(N_snap)
+        fixed_z = _sample_latent(N_snap, latent_dim)
         fixed_label = _sample_rand_label(N_snap)
 
     stats = dict()

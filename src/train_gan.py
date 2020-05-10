@@ -7,7 +7,6 @@ import torch
 import torch.distributed as dist
 import torchvision
 
-from functools import partial
 from hydra.utils import instantiate
 from ignite.contrib.handlers import ProgressBar
 from ignite.engine import Engine, Events
@@ -161,13 +160,12 @@ def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConf
         trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
 
 
-def run(conf: DictConfig):
+def run(conf: DictConfig, local_rank=0):
     epochs = conf.train.epochs
     epoch_length = conf.train.epoch_length
     torch.manual_seed(conf.general.seed)
 
     dist_conf = conf.distributed
-    local_rank = dist_conf.local_rank
     backend = dist_conf.backend
     distributed = backend is not None
 
@@ -182,7 +180,7 @@ def run(conf: DictConfig):
     device = torch.device('cuda')
     loader_args = dict()
 
-    if rank == 0:
+    if rank == 0 or True:
         print(conf.pretty())
     if num_replicas > 1:
         epoch_length = epoch_length // num_replicas
@@ -211,26 +209,7 @@ def run(conf: DictConfig):
         G_ema.load_state_dict(G.state_dict())
         G_ema.requires_grad_(False)
 
-    train_options = {
-        'train':    dict(conf.train.options),
-        'snapshot': dict(conf.train.snapshots)
-    }
-    bs_dl = conf.data.loader.batch_size
-    bs_eff = conf.train.options.batch_size
-    if bs_eff % bs_dl:
-        raise AttributeError("Effective batch size should be divisible by data-loader batch size")
-    train_options['train']['update_interval'] = bs_eff // bs_dl
-
-    train_loop, make_snapshot = create_train_closures(
-        G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
-    trainer = create_trainer(train_loop, metrics, device)
-
-    every_iteration = Events.ITERATION_COMPLETED
-    trainer.add_event_handler(every_iteration, TerminateOnNan())
-
-    cp = conf.train.checkpoints
     to_save = {
-        'trainer': trainer,
         'G': G,
         'D': D,
         'G_loss': G_loss,
@@ -239,7 +218,33 @@ def run(conf: DictConfig):
         'D_opt': D_opt,
         'G_ema': G_ema
     }
-    save_path = cp.get('save_dir', os.getcwd())
+
+    if distributed:
+        ddp_kwargs = dict(device_ids=[local_rank, ], output_device=local_rank)
+        G = torch.nn.parallel.DistributedDataParallel(G, **ddp_kwargs)
+        D = torch.nn.parallel.DistributedDataParallel(D, **ddp_kwargs)
+
+    train_options = {
+        'train':    dict(conf.train.options),
+        'snapshot': dict(conf.train.snapshots)
+    }
+    bs_dl = conf.data.loader.batch_size
+    bs_eff = conf.train.options.batch_size
+    if bs_eff % bs_dl:
+        raise AttributeError("Effective batch size should be divisible by data-loader batch size")
+    upd_interval = bs_eff // bs_dl
+    epoch_length *= upd_interval
+    train_options['train']['update_interval'] = upd_interval
+
+    train_loop, make_snapshot = create_train_closures(
+        G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
+    trainer = create_trainer(train_loop, metrics, device)
+    to_save['trainer'] = trainer
+
+    every_iteration = Events.ITERATION_COMPLETED
+    trainer.add_event_handler(every_iteration, TerminateOnNan())
+
+    cp = conf.train.checkpoints
     pbar = None
 
     if rank == 0:
@@ -256,6 +261,7 @@ def run(conf: DictConfig):
             logging.info("Resume from a checkpoint: {}".format(cp.load))
             trainer.add_event_handler(Events.STARTED, _upd_pbar_iter_from_cp, pbar)
 
+        save_path = cp.get('save_dir', os.getcwd())
         logging.info("Saving checkpoints to {}".format(save_path))
         max_cp = max(int(cp.get('max_checkpoints', 1)), 1)
         save = DiskSaver(save_path, create_dir=True, require_empty=True)
@@ -287,8 +293,9 @@ def run(conf: DictConfig):
 
 @hydra.main(config_path="../config/train_gan.yaml")
 def main(conf: DictConfig):
-    dist_conf = conf.distributed
-    local_rank = dist_conf.local_rank
+    env = os.environ.copy()
+    local_rank = int(env.get('LOCAL_RANK', 0))
+    dist_conf: DictConfig = conf.distributed
     backend = dist_conf.backend
     distributed = backend is not None
 
@@ -305,7 +312,7 @@ def main(conf: DictConfig):
             print("\trank: {}\n".format(dist.get_rank()))
 
     try:
-        run(conf)
+        run(conf, local_rank)
     except KeyboardInterrupt:
         print("Shutting down...")
     except Exception as e:

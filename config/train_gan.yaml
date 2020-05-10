@@ -4,7 +4,7 @@ hydra:
   job_logging:
     handlers:
       file:
-        filename: ${hydra.job.name}_${distributed.local_rank}.log
+        filename: ${hydra.job.name}.log
 
 defaults:
   - dataset: simple
@@ -14,8 +14,7 @@ general:
   seed: 333
 
 distributed:
-  backend: null
-  local_rank: 0
+  backend:
   url: env://
 
 data:

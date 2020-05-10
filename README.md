@@ -16,6 +16,16 @@ The code was developed and tested under the environment:
 pip install -r requirements.txt
 ```
 
+## Usage
+
+Launch distributed training on GPUs:
+
+```shell script
+python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py distributed.backend=nccl
+```
+
+It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.
+
 ## License
 
 Some parts of this work are derivatives and as such they are licensed under the same license terms as the original work. 
