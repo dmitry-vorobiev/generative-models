@@ -17,6 +17,7 @@ from omegaconf import DictConfig
 from torch import Tensor
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms as T
+from torchvision.datasets import ImageFolder
 from typing import Any, Dict, List, Optional, Tuple, Sized
 
 from data.dataset import JustImages
@@ -102,6 +103,12 @@ def create_simple_dataset(conf, transforms):
     return ds
 
 
+def create_image_folder_dataset(conf, transforms):
+    # type: (DictConfig, DictConfig) -> ImageFolder
+    transforms = T.Compose([instantiate(v) for k, v in transforms.items()])
+    return ImageFolder(conf.root, transform=transforms)
+
+
 def default_collate_no_labels(batch):
     # type: (List[Tensor]) -> Tuple[Tensor, None]
     """
@@ -122,10 +129,12 @@ def default_collate_no_labels(batch):
 def create_train_loader(conf, rank=None, num_replicas=None):
     # type: (DictConfig, Optional[int], Optional[int]) -> Sized
     build_ds = {
-        'simple': create_simple_dataset
+        'simple': create_simple_dataset,
+        'image_folder': create_image_folder_dataset,
     }
     collate_funcs = {
         'simple': default_collate_no_labels,
+        'image_folder': None,
     }
     ds_type = conf.type
     data = build_ds[ds_type](conf, conf.transforms)
@@ -265,6 +274,10 @@ def run(conf: DictConfig, local_rank=0):
                              "multiplied by number of devices in use")  # until there is no special bs for master node...
     upd_interval = max(bs_eff // bs_dl, 1)
     train_options['train']['update_interval'] = upd_interval
+    if epoch_length < len(train_dl):
+        # ideally epoch_length should be tied to the effective batch_size only
+        # and the ignite trainer counts data-loader iterations
+        epoch_length *= upd_interval
 
     train_loop, make_snapshot = create_train_closures(
         G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
