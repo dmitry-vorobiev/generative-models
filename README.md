@@ -16,6 +16,18 @@ The code was developed and tested under the environment:
 pip install -r requirements.txt
 ```
 
+## Dataset
+
+To download the FFHQ dataset, please, refer to the [original repo](https://github.com/NVlabs/ffhq-dataset). 
+
+To point the script to your local data folder you will have to update `data.root` setting in the `config/train_gan.yaml` 
+or pass it as a command line argument:
+
+```shell script
+python src/train_gan.py data.root=/your/local/dir
+```
+
+
 ## Usage
 
 Launch distributed training on GPUs:
