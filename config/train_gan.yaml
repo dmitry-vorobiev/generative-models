@@ -31,7 +31,7 @@ model:
     class: models.stylegan2.net.Generator
     params:
       img_res: 128
-      label_dim: 0
+      num_classes: 0
       latent_dim: 128
       fmap_base: 2048
       num_mapping_layers: 4
@@ -44,7 +44,7 @@ model:
     class: models.stylegan2.net.Discriminator
     params:
       img_res: 128
-      label_dim: 0
+      num_classes: 0
       fmap_base: 2048
       impl: torch
 
@@ -74,13 +74,11 @@ optim:
       eps: 1e-8
 
 train:
-  skip: false
   epochs: 100
   epoch_length: -1
   G_ema: true
   G_ema_on_cpu: false
   G_ema_decay: 0.99778
-  num_classes: 0
   # the effective batch size for gradient accumulation
   batch_size: 32
 

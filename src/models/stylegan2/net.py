@@ -111,13 +111,13 @@ class ResidualBlock(nn.Module):
 
 
 class MappingNet(nn.Module):
-    def __init__(self, latent_dim=512, label_dim=0, style_dim=512,
+    def __init__(self, latent_dim=512, num_classes=0, style_dim=512,
                  num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
         super(MappingNet, self).__init__()
         in_fmaps = latent_dim
         self.embed_labels = None
-        if label_dim > 0:
-            self.embed_labels = ConcatLabels(label_dim, latent_dim)
+        if num_classes > 0:
+            self.embed_labels = ConcatLabels(num_classes, latent_dim)
             in_fmaps = latent_dim * 2
 
         layers = [Normalize()] if normalize else []
@@ -208,7 +208,7 @@ class SynthesisNet(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, img_res=1024, img_channels=3, latent_dim=512, label_dim=0, style_dim=512,
+    def __init__(self, img_res=1024, img_channels=3, num_classes=0, latent_dim=512, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
                  num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
                  p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None,
@@ -222,10 +222,10 @@ class Generator(nn.Module):
             truncation_psi = None
 
         self.latent_dim = latent_dim
-        self.label_dim = label_dim
+        self.num_classes = num_classes
 
         self.mapping = MappingNet(
-            latent_dim, label_dim, style_dim, num_layers=num_mapping_layers,
+            latent_dim, num_classes, style_dim, num_layers=num_mapping_layers,
             hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize=normalize_latent)
 
         self.synthesis = SynthesisNet(
@@ -290,7 +290,7 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, img_res=1024, img_channels=3, label_dim=0, fmap_base=16 << 10,
+    def __init__(self, img_res=1024, img_channels=3, num_classes=0, fmap_base=16 << 10,
                  fmap_decay=1.0, fmap_min=1, fmap_max=512, mbstd_group_size=4,
                  mbstd_num_features=1, impl="ref", blur_kernel=None):
         super(Discriminator, self).__init__()
@@ -304,6 +304,8 @@ class Discriminator(nn.Module):
 
         if impl not in ["torch", "ref"]:
             raise AttributeError("impl should be one of [torch, ref]")
+
+        self.num_classes = num_classes
 
         if impl == "ref":
             if blur_kernel is None:
@@ -327,14 +329,16 @@ class Discriminator(nn.Module):
                Flatten(),
                EqualizedLRLinear(nf(1) * 4 ** 2, nf(0), bias=True),
                EqualizedLRLeakyReLU(inplace=True),
-               EqualizedLRLinear(nf(0), max(label_dim, 1), bias=True)]
+               EqualizedLRLinear(nf(0), max(num_classes, 1), bias=True)]
         if mbstd_ch:
             mbstd = ConcatMiniBatchStddev(mbstd_group_size, mbstd_num_features)
             out = [mbstd] + out
         self.layers = nn.Sequential(inp, *main, *out)
 
-    def forward(self, image: Tensor, label: Label = None) -> Tensor:
+    def forward(self, image, label=None):
+        # type: (Tensor, Label) -> Tensor
         x = self.layers(image)
         if label is not None:
+            label = F.one_hot(label, num_classes=self.num_classes)
             x = torch.sum(x * label, dim=1, keepdim=True)
         return x

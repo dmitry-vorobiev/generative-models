@@ -4,22 +4,22 @@ import torch.nn.functional as F
 from functools import partial
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from .net import Discriminator, Generator
-from my_types import Device, DLossFunc, FloatDict, GLossFunc, SnapshotFunc, TrainFunc
+from my_types import Batch, Device, DLossFunc, FloatDict, GLossFunc, SnapshotFunc, TrainFunc
 
 Options = Optional[Mapping[str, Any]]
 
 
 # TODO: how to properly handle buffers?
-def ema_step(G, G_ema, decay=0.001):
+def ema_step(G, G_ema, weight=0.001):
     # type: (Generator, Generator, float) -> None
     curr_state = dict(G.named_parameters(recurse=True))
     with torch.no_grad():
         for name, param in G_ema.named_parameters(recurse=True):
             curr_value = curr_state[name].to(param.device)
-            param.lerp_(curr_value, decay)
+            param.lerp_(curr_value, weight)
 
 
 def sample_latent(batch_size, dim, device=None):
@@ -28,9 +28,8 @@ def sample_latent(batch_size, dim, device=None):
 
 
 def sample_rand_label(batch_size, num_classes, device=None):
-    # type: (int, int, Device) -> Optional[Tensor]
-    y = torch.randint(num_classes, (batch_size,), device=device)
-    return F.one_hot(y, num_classes=num_classes)
+    # type: (int, int, Device) -> Tensor
+    return torch.randint(num_classes, (batch_size,), device=device)
 
 
 def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None, device=None,
@@ -42,10 +41,15 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         snap_fakes, _ = G_ema(fixed_z, fixed_label)
         return snap_fakes
 
-    def _loop(iteration, image, label=None):
-        # type: (int, Tensor, Optional[Tensor]) -> FloatDict
+    def _loop(iteration, batch):
+        # type: (int, Batch) -> FloatDict
         G.train()
         D.train()
+
+        if isinstance(batch, Tensor):
+            image, label = batch, None
+        else:
+            image, label = batch
         N = image.size(0)
 
         if not iteration % rounds:
@@ -74,7 +78,6 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         image = image.to(device)
         if label is not None:
             label = label.to(device)
-            label = F.one_hot(label, num_classes=num_classes)
 
         z = _sample_z(N)
         d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
@@ -87,13 +90,13 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
     assert options is not None
     train_opts = options['train']
-    num_classes = train_opts.get("num_classes", -1)
     ema_decay = train_opts.get("G_ema_decay", 0.999)
     ema_decay = 1 - ema_decay
     rounds = train_opts['update_interval']
 
     G_ = G.module if hasattr(G, 'module') else G
     latent_dim = G_.latent_dim
+    num_classes = G_.num_classes
     _sample_z = partial(sample_latent, dim=latent_dim, device=device)
 
     def _sample_label(*args): return None

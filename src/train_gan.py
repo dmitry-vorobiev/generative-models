@@ -63,7 +63,7 @@ def create_trainer(train_func, metrics=None, device=None):
 
     def _update(e: Engine, batch: Batch) -> FloatDict:
         iteration = e.state.iteration - 1  # it starts from 1
-        loss = train_func(iteration, *batch)
+        loss = train_func(iteration, batch)
         return loss
 
     trainer = Engine(_update)
@@ -109,32 +109,11 @@ def create_image_folder_dataset(conf, transforms):
     return ImageFolder(conf.root, transform=transforms)
 
 
-def default_collate_no_labels(batch):
-    # type: (List[Tensor]) -> Tuple[Tensor, None]
-    """
-    Copy-paste from torch/utils/data/_utils/collate.py default_collate
-    """
-    elem = batch[0]
-    assert isinstance(elem, torch.Tensor)
-    out = None
-    if torch.utils.data.get_worker_info() is not None:
-        # If we're in a background process, concatenate directly into a
-        # shared memory tensor to avoid an extra copy
-        numel = sum([x.numel() for x in batch])
-        storage = elem.storage()._new_shared(numel)
-        out = elem.new(storage)
-    return torch.stack(batch, 0, out=out), None
-
-
 def create_train_loader(conf, rank=None, num_replicas=None):
     # type: (DictConfig, Optional[int], Optional[int]) -> Sized
     build_ds = {
         'simple': create_simple_dataset,
         'image_folder': create_image_folder_dataset,
-    }
-    collate_funcs = {
-        'simple': default_collate_no_labels,
-        'image_folder': None,
     }
     ds_type = conf.type
     data = build_ds[ds_type](conf, conf.transforms)
@@ -146,7 +125,6 @@ def create_train_loader(conf, rank=None, num_replicas=None):
 
     loader = DataLoader(data,
                         sampler=sampler,
-                        collate_fn=collate_funcs[ds_type],
                         batch_size=conf.loader.batch_size,
                         num_workers=conf.get('loader.workers', 0),
                         drop_last=True)
