@@ -95,9 +95,14 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
     rounds = train_opts['update_interval']
 
     G_ = G.module if hasattr(G, 'module') else G
+    D_ = D.module if hasattr(D, 'module') else D
     latent_dim = G_.latent_dim
     num_classes = G_.num_classes
     _sample_z = partial(sample_latent, dim=latent_dim, device=device)
+
+    if G_.num_classes != D_.num_classes:
+        raise AttributeError("num_classes for G and D doesn't match, G: {}, D: {}"
+                             .format(G_.num_classes, D_.num_classes))
 
     def _sample_label(*args): return None
     if num_classes > 1:
