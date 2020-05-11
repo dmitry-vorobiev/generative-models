@@ -219,7 +219,7 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         x = self.conv2d_forward(x, style, self.weight * self.weight_mult)
         if self.bias is not None:
             bias = self.bias * self.lr_mult
-            x = x + bias[:, None, None]
+            x += bias[:, None, None]
         return x
 
 
