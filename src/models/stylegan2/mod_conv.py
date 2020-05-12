@@ -180,7 +180,7 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
     def _demodulate(self, w: Tensor, eps=1e-8) -> Tensor:
         # in channels dim: 2 - normal, 1 - transposed
         C_in = 2 - int(self.transposed)
-        d = torch.rsqrt(w.pow(2).sum(dim=(C_in, 3, 4), keepdim=True) + eps)
+        d = torch.rsqrt_(w.pow(2).sum(dim=(C_in, 3, 4), keepdim=True).add_(eps))
         return w * d
 
     def _upsample_conv2d_ref(self, x, w):
