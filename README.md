@@ -33,7 +33,7 @@ python src/train_gan.py data.root=/your/local/dir
 Launch distributed training on GPUs:
 
 ```shell script
-python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py distributed.backend=nccl
+python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py
 ```
 
 It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.

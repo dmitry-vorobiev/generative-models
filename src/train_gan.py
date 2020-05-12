@@ -35,15 +35,16 @@ def on_epoch_start(engine: Engine):
     engine.state.t0 = time.time()
 
 
-def log_iter(engine: Engine, trainer: Engine, pbar: ProgressBar, log_interval: int) -> None:
-    epoch = trainer.state.epoch
+def log_iter(engine, pbar, interval_steps=100):
+    # type: (Engine, ProgressBar, Optional[int]) -> None
+    epoch = engine.state.epoch
     iteration = engine.state.iteration
     metrics = engine.state.metrics
-    stats = {k: '%.3f' % v for k, v in metrics.items()}
-    stats = ', '.join(['{}: {}'.format(*e) for e in stats.items()])
+    stats = ", ".join(["%s: %.3f" % k_v for k_v in metrics.items()])
     t0 = engine.state.t0
     t1 = time.time()
-    it_time = (t1 - t0) / log_interval
+    # TODO: use timers from ignite / ignite.contrib, add GPU memory info
+    it_time = (t1 - t0) / interval_steps
     cur_time = humanize_time(t1)
     pbar.log_message("[{}][{:.2f} s] | ep: {:2d}, it: {:3d}, {}".format(
         cur_time, it_time, epoch, iteration, stats))
@@ -53,18 +54,25 @@ def log_iter(engine: Engine, trainer: Engine, pbar: ProgressBar, log_interval: i
 def log_epoch(engine: Engine) -> None:
     epoch = engine.state.epoch
     metrics = engine.state.metrics
-    stats = {k: '%.3f' % v for k, v in metrics.items()}
-    stats = ', '.join(['{}: {}'.format(*e) for e in stats.items()])
+    stats = ", ".join(["%s: %.3f" % k_v for k_v in metrics.items()])
     logging.info("ep: {}, {}".format(epoch, stats))
 
 
-def create_trainer(train_func, metrics=None, device=None):
-    # type: (TrainFunc, Optional[Metrics], Device) -> Engine
+def create_trainer(train_func, metrics=None, device=None, num_replicas=1):
+    # type: (TrainFunc, Optional[Metrics], Device, Optional[int]) -> Engine
+
+    def _scale_by_num_replicas(loss: dict):
+        return {k: v / num_replicas for k, v in loss.items()}
+
+    def _noop(loss: dict):
+        return loss
+
+    handle_loss = _scale_by_num_replicas if num_replicas > 1 else _noop
 
     def _update(e: Engine, batch: Batch) -> FloatDict:
         iteration = e.state.iteration - 1  # it starts from 1
         loss = train_func(iteration, batch)
-        return loss
+        return handle_loss(loss)
 
     trainer = Engine(_update)
     if metrics:
@@ -172,14 +180,10 @@ def setup_checkpoints(trainer, obj_to_save, epoch_length, conf):
             trainer.add_event_handler(save_event, make_checkpoint)
 
 
-def run(conf: DictConfig, local_rank=0):
+def run(conf: DictConfig, local_rank=0, distributed=False):
     epochs = conf.train.epochs
     epoch_length = conf.train.epoch_length
     torch.manual_seed(conf.general.seed)
-
-    dist_conf = conf.distributed
-    backend = dist_conf.backend
-    distributed = backend is not None
 
     if distributed:
         rank = dist.get_rank()
@@ -259,7 +263,7 @@ def run(conf: DictConfig, local_rank=0):
 
     train_loop, make_snapshot = create_train_closures(
         G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
-    trainer = create_trainer(train_loop, metrics, device)
+    trainer = create_trainer(train_loop, metrics, device, num_replicas)
     to_save['trainer'] = trainer
 
     every_iteration = Events.ITERATION_COMPLETED
@@ -273,7 +277,7 @@ def run(conf: DictConfig, local_rank=0):
         log_event = Events.ITERATION_COMPLETED(every=log_freq)
         pbar = ProgressBar(persist=False)
         trainer.add_event_handler(Events.EPOCH_STARTED, on_epoch_start)
-        trainer.add_event_handler(log_event, log_iter, trainer, pbar, log_freq)
+        trainer.add_event_handler(log_event, log_iter, pbar, log_freq)
         trainer.add_event_handler(Events.EPOCH_COMPLETED, log_epoch)
         pbar.attach(trainer, metric_names=metric_names)
         setup_checkpoints(trainer, to_save, epoch_length, conf)
@@ -298,17 +302,17 @@ def run(conf: DictConfig, local_rank=0):
 @hydra.main(config_path="../config/train_gan.yaml")
 def main(conf: DictConfig):
     env = os.environ.copy()
-    local_rank = int(env.get('LOCAL_RANK', 0))
+    world_size = int(env.get('WORLD_SIZE', -1))
+    local_rank = int(env.get('LOCAL_RANK', -1))
     dist_conf: DictConfig = conf.distributed
-    backend = dist_conf.backend
-    distributed = backend is not None
+    distributed = world_size > 1 and local_rank >= 0
 
     if distributed:
         if not torch.cuda.is_available():
             raise RuntimeError("Unable to find any CUDA device")
 
         torch.backends.cudnn.benchmark = True
-        dist.init_process_group(backend, init_method=dist_conf.url)
+        dist.init_process_group(dist_conf.backend, init_method=dist_conf.url)
         if local_rank == 0:
             print("\nDistributed setting:")
             print("\tbackend: {}".format(dist.get_backend()))
@@ -316,7 +320,7 @@ def main(conf: DictConfig):
             print("\trank: {}\n".format(dist.get_rank()))
 
     try:
-        run(conf, local_rank)
+        run(conf, local_rank, distributed)
     except KeyboardInterrupt:
         print("Shutting down...")
     except Exception as e:

@@ -14,7 +14,7 @@ general:
   seed: 333
 
 distributed:
-  backend:
+  backend: nccl
   url: env://
 
 data:
