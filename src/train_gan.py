@@ -150,7 +150,7 @@ def handle_snapshot_images(engine, sample_images, save_dir, dynamic_range=(-1, 1
 def setup_snapshots(trainer, sample_images, conf):
     # type: (Engine, SampleImages, DictConfig) -> None
     snapshots = conf.snapshots
-    use_ema = conf.train.G_ema
+    use_ema = conf.G_smoothing.enabled
     if snapshots.enabled:
         if use_ema:
             snap_event = Events.ITERATION_COMPLETED(every=snapshots.interval_iteration)
@@ -161,7 +161,7 @@ def setup_snapshots(trainer, sample_images, conf):
             trainer.add_event_handler(snap_event, handle_snapshot_images, sample_images, snap_path,
                                       dynamic_range=tuple(snapshots.dynamic_range))
         else:
-            logging.warning("Snapshot generation requires train.G_ema=true. "
+            logging.warning("Snapshot generation requires G_smoothing.enabled=true. "
                             "Snapshots will be turned off for this run.")
 
 
@@ -223,9 +223,9 @@ def run(conf: DictConfig, local_rank=0, distributed=False):
     D_opt = instantiate(conf.optim.D, D.parameters())
     G_ema = None
 
-    if conf.train.G_ema and master_node:
+    if master_node and conf.G_smoothing.enabled:
         G_ema = instantiate(conf.model.G)
-        if not conf.train.G_ema_on_cpu:
+        if not conf.G_smoothing.use_cpu:
             G_ema = G_ema.to(device)
         G_ema.load_state_dict(G.state_dict())
         G_ema.requires_grad_(False)
@@ -251,7 +251,8 @@ def run(conf: DictConfig, local_rank=0, distributed=False):
 
     train_options = {
         'train':    dict(conf.train),
-        'snapshot': dict(conf.snapshots)
+        'snapshot': dict(conf.snapshots),
+        'smoothing': dict(conf.G_smoothing)
     }
     bs_dl = int(conf.data.loader.batch_size) * num_replicas
     bs_eff = conf.train.batch_size

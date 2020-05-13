@@ -1,3 +1,4 @@
+import logging
 import torch
 import torch.nn.functional as F
 
@@ -10,6 +11,8 @@ from .net import Discriminator, Generator
 from my_types import Batch, Device, DLossFunc, FloatDict, GLossFunc, SampleImages, TrainFunc
 
 Options = Optional[Mapping[str, Any]]
+
+log = logging.getLogger(__name__)
 
 
 # TODO: how to properly handle buffers?
@@ -68,7 +71,8 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
             # Average G weights
             if G_ema is not None:
-                ema_step(G_, G_ema, ema_decay)
+                if not iteration % ema_rounds:
+                    ema_step(G_, G_ema, ema_weight)
 
         # Training discriminator
         if not iteration % rounds:
@@ -90,10 +94,18 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
     assert options is not None
     train_opts = options['train']
-    # TODO: replace with calculation from G_smoothing_kimg as in the original work
-    ema_decay = train_opts.get("G_ema_decay", 0.999)
-    ema_decay = 1 - ema_decay
+    batch_size = train_opts['batch_size']
     rounds = train_opts['update_interval']
+
+    smooth_opts = options['smoothing']
+    if G_ema is not None:
+        ema_rounds = smooth_opts.get('upd_interval', 1)
+        smooth_num_images = smooth_opts.get('num_kimg', 10.0) * 1000
+        ema_beta = 0.5 ** (batch_size / smooth_num_images)
+        ema_beta **= ema_rounds
+        log.info("Using exponential moving average of G weights with decay rate %.06f "
+                 "and update interval %d steps" % (ema_beta, ema_rounds))
+        ema_weight = 1 - ema_beta
 
     G_ = G.module if hasattr(G, 'module') else G
     D_ = D.module if hasattr(D, 'module') else D

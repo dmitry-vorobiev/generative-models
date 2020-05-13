@@ -76,11 +76,14 @@ optim:
 train:
   epochs: 100
   epoch_length: -1
-  G_ema: true
-  G_ema_on_cpu: false
-  G_ema_decay: 0.99778
   # the effective batch size for gradient accumulation
   batch_size: 32
+
+G_smoothing:
+  enabled: true
+  use_cpu: false
+  num_kimg: 10.0
+  upd_interval: 1
 
 checkpoints:
   load: null
