@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple, Sized
 
 from data.dataset import JustImages
 from models.stylegan2.train import create_train_closures
-from my_types import Batch, Device, FloatDict, SnapshotFunc, TrainFunc
+from my_types import Batch, Device, FloatDict, SampleImages, TrainFunc
 
 Metrics = Dict[str, Metric]
 
@@ -139,14 +139,16 @@ def create_train_loader(conf, rank=None, num_replicas=None):
     return loader
 
 
-def handle_snapshot_images(engine, make_snapshot, save_dir, dynamic_range=(-1, 1)):
-    # type: (Engine, SnapshotFunc, str, Optional[Tuple[int]]) -> None
-    images = make_snapshot()
+def handle_snapshot_images(engine, sample_images, save_dir, dynamic_range=(-1, 1)):
+    # type: (Engine, SampleImages, str, Optional[Tuple[int]]) -> None
+    images = sample_images()
     path = os.path.join(save_dir, '%06d.png' % engine.state.iteration)
+    # TODO: calc number of rows based on image size
     torchvision.utils.save_image(images, path, normalize=True, range=dynamic_range)
 
 
-def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):
+def setup_snapshots(trainer, sample_images, conf):
+    # type: (Engine, SampleImages, DictConfig) -> None
     snapshots = conf.snapshots
     use_ema = conf.train.G_ema
     if snapshots.enabled:
@@ -156,7 +158,7 @@ def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConf
             if not os.path.exists(snap_path):
                 os.makedirs(snap_path)
             logging.info("Saving snapshot images to {}".format(snap_path))
-            trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path,
+            trainer.add_event_handler(snap_event, handle_snapshot_images, sample_images, snap_path,
                                       dynamic_range=tuple(snapshots.dynamic_range))
         else:
             logging.warning("Snapshot generation requires train.G_ema=true. "
@@ -263,7 +265,7 @@ def run(conf: DictConfig, local_rank=0, distributed=False):
         # and the ignite trainer counts data-loader iterations
         epoch_length *= upd_interval
 
-    train_loop, make_snapshot = create_train_closures(
+    train_loop, sample_images = create_train_closures(
         G, D, G_loss, D_loss, G_opt, D_opt, G_ema=G_ema, device=device, options=train_options)
     trainer = create_trainer(train_loop, metrics, device, num_replicas)
     to_save['trainer'] = trainer
@@ -283,7 +285,7 @@ def run(conf: DictConfig, local_rank=0, distributed=False):
         trainer.add_event_handler(Events.EPOCH_COMPLETED, log_epoch)
         pbar.attach(trainer, metric_names=metric_names)
         setup_checkpoints(trainer, to_save, epoch_length, conf)
-        setup_snapshots(trainer, make_snapshot, conf)
+        setup_snapshots(trainer, sample_images, conf)
 
     if 'load' in cp.keys() and cp.load is not None:
         if master_node:

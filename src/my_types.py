@@ -15,4 +15,4 @@ GLossFunc = Callable[[G, D, Tensor, Optional[Tensor], Optional[FloatDict]], Tens
 DLossFunc = Callable[[G, D, Tensor, Tensor, Optional[Tensor], Optional[FloatDict]], Tensor]
 
 TrainFunc = Callable[[int, Batch], FloatDict]
-SnapshotFunc = Callable[[], Tensor]
+SampleImages = Callable[[], Tensor]

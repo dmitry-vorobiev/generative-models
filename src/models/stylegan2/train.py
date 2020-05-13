@@ -7,7 +7,7 @@ from torch.optim.optimizer import Optimizer
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from .net import Discriminator, Generator
-from my_types import Batch, Device, DLossFunc, FloatDict, GLossFunc, SnapshotFunc, TrainFunc
+from my_types import Batch, Device, DLossFunc, FloatDict, GLossFunc, SampleImages, TrainFunc
 
 Options = Optional[Mapping[str, Any]]
 
@@ -34,9 +34,9 @@ def sample_rand_label(batch_size, num_classes, device=None):
 
 def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=None, device=None,
                           options=None):
-    # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, Optional[Generator], Device, Options) -> Tuple[TrainFunc, SnapshotFunc]
+    # type: (Generator, Discriminator, GLossFunc, DLossFunc, Optimizer, Optimizer, Optional[Generator], Device, Options) -> Tuple[TrainFunc, SampleImages]
 
-    def _make_snapshot() -> Tensor:
+    def _sample_fake_images() -> Tensor:
         G_ema.eval()
         # TODO: add separate batch_size for G_ema
         snap_fakes, _ = G_ema(fixed_z, fixed_label)
@@ -129,4 +129,4 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
                     group['betas'] = (beta1 ** mb_ratio, beta2 ** mb_ratio)
 
     stats = dict()
-    return _loop, _make_snapshot
+    return _loop, _sample_fake_images
