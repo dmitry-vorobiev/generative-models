@@ -142,7 +142,7 @@ def create_train_loader(conf, rank=None, num_replicas=None):
 def handle_snapshot_images(engine: Engine, make_snapshot: SnapshotFunc, save_dir: str):
     images = make_snapshot()
     path = os.path.join(save_dir, '%06d.png' % engine.state.iteration)
-    torchvision.utils.save_image(images, path)
+    torchvision.utils.save_image(images, path, normalize=True, range=(-1, 1))
 
 
 def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):

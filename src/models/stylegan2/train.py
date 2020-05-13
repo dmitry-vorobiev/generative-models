@@ -38,6 +38,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
     def _make_snapshot() -> Tensor:
         G_ema.eval()
+        # TODO: add separate batch_size for G_ema
         snap_fakes, _ = G_ema(fixed_z, fixed_label)
         return snap_fakes
 
