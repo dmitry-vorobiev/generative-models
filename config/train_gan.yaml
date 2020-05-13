@@ -106,3 +106,4 @@ snapshots:
   save_dir: null
   num_images: 32
   interval_iteration: 100
+  dynamic_range: [-1, 1]

@@ -139,10 +139,11 @@ def create_train_loader(conf, rank=None, num_replicas=None):
     return loader
 
 
-def handle_snapshot_images(engine: Engine, make_snapshot: SnapshotFunc, save_dir: str):
+def handle_snapshot_images(engine, make_snapshot, save_dir, dynamic_range=(-1, 1)):
+    # type: (Engine, SnapshotFunc, str, Optional[Tuple[int]]) -> None
     images = make_snapshot()
     path = os.path.join(save_dir, '%06d.png' % engine.state.iteration)
-    torchvision.utils.save_image(images, path, normalize=True, range=(-1, 1))
+    torchvision.utils.save_image(images, path, normalize=True, range=dynamic_range)
 
 
 def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConfig):
@@ -155,7 +156,8 @@ def setup_snapshots(trainer: Engine, make_snapshot: SnapshotFunc, conf: DictConf
             if not os.path.exists(snap_path):
                 os.makedirs(snap_path)
             logging.info("Saving snapshot images to {}".format(snap_path))
-            trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path)
+            trainer.add_event_handler(snap_event, handle_snapshot_images, make_snapshot, snap_path,
+                                      dynamic_range=tuple(snapshots.dynamic_range))
         else:
             logging.warning("Snapshot generation requires train.G_ema=true. "
                             "Snapshots will be turned off for this run.")

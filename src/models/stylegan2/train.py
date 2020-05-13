@@ -76,11 +76,10 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
             D.requires_grad_(True)
             D_opt.zero_grad()
 
+        z = _sample_z(N)
         image = image.to(device)
         if label is not None:
             label = label.to(device)
-
-        z = _sample_z(N)
         d_loss, d_stats = D_loss_func(G, D, image, z, label, stats)
         d_loss.backward()
 
@@ -91,6 +90,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
 
     assert options is not None
     train_opts = options['train']
+    # TODO: replace with calculation from G_smoothing_kimg as in the original work
     ema_decay = train_opts.get("G_ema_decay", 0.999)
     ema_decay = 1 - ema_decay
     rounds = train_opts['update_interval']
