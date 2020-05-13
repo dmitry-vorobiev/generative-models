@@ -109,15 +109,23 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         _sample_label = partial(sample_rand_label, num_classes=num_classes, device=device)
 
     snap_opts = options['snapshot']
-    N_snap = snap_opts.get("num_images", 16)
     fixed_z, fixed_label = None, None
-
     if snap_opts['enabled'] and G_ema is not None:
+        N_snap = snap_opts.get("num_images", 16)
         G_ema_device = next(G_ema.parameters()).device
         fixed_z = sample_latent(N_snap, latent_dim, G_ema_device)
-        fixed_label = None
         if num_classes > 1:
             fixed_label = sample_rand_label(N_snap, num_classes, G_ema_device)
+
+    # Update optimizer settings if lazy_regularization is used (reg_interval > 1)
+    for optimizer, loss in zip([G_opt, D_opt], [G_loss_func, D_loss_func]):
+        if hasattr(loss, 'reg_interval') and loss.reg_interval > 1:
+            mb_ratio = loss.reg_interval / (loss.reg_interval + 1)
+            for group in optimizer.param_groups:
+                group['lr'] *= mb_ratio
+                if 'betas' in group:
+                    beta1, beta2 = group['betas']
+                    group['betas'] = (beta1 ** mb_ratio, beta2 ** mb_ratio)
 
     stats = dict()
     return _loop, _make_snapshot

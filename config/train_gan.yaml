@@ -52,11 +52,11 @@ loss:
   G:
     class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
     params:
-      pl_reg_freq: 4
+      pl_reg_interval: 4
   D:
     class: models.stylegan2.loss.D_LogisticLoss_R1
     params:
-      r1_freq: 16
+      r1_interval: 16
       r1_gamma: 100
 
 optim:

@@ -23,18 +23,18 @@ class D_LogisticLoss_R1(nn.Module):
         "Which Training Methods for GANs do actually Converge?", Mescheder et al. 2018
     """
 
-    def __init__(self, r1_freq=16, r1_gamma=10.0):
+    def __init__(self, r1_interval=16, r1_gamma=10.0):
         super(D_LogisticLoss_R1, self).__init__()
-        self.freq = r1_freq
+        self.reg_interval = r1_interval
         self.gamma = r1_gamma
         self.count = 0
 
     @property
     def should_reg(self) -> bool:
-        return self.count % self.freq == 0
+        return self.count % self.reg_interval == 0
 
     def update_count(self) -> None:
-        self.count = (self.count + 1) % self.freq
+        self.count = (self.count + 1) % self.reg_interval
 
     @staticmethod
     def zero_stats():
@@ -63,7 +63,7 @@ class D_LogisticLoss_R1(nn.Module):
             penalty = r1_penalty(real_score, reals, reduce_mean=True)
             stats['D_r1'] = penalty.item()
             reg = penalty * (self.gamma * 0.5)
-            loss = loss + (reg * self.freq)
+            loss = loss + (reg * self.reg_interval)
 
         stats['D_loss'] = loss.item()
         self.update_count()
@@ -95,10 +95,10 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
        "Analyzing and Improving the Image Quality of StyleGAN", Karras et al. 2019
     """
 
-    def __init__(self, pl_ema_decay=0.01, pl_reg_freq=4, pl_reg_weight=2.0):
+    def __init__(self, pl_ema_decay=0.01, pl_reg_interval=4, pl_reg_weight=2.0):
         super(G_LogisticNSLoss_PathLenReg, self).__init__()
         self.decay = pl_ema_decay
-        self.freq = pl_reg_freq
+        self.reg_interval = pl_reg_interval
         self.weight = pl_reg_weight
 
         self.register_buffer('pl_avg', torch.zeros(1))
@@ -106,10 +106,10 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
 
     @property
     def should_reg(self) -> bool:
-        return self.count % self.freq == 0
+        return self.count % self.reg_interval == 0
 
     def update_count(self) -> None:
-        self.count = (self.count + 1) % self.freq
+        self.count = (self.count + 1) % self.reg_interval
 
     @staticmethod
     def zero_stats():
@@ -143,7 +143,7 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
             # = ln(2) / (r^2 * (ln(r) - ln(2))
             #
             reg = penalty * self.weight
-            loss = loss + (reg * self.freq)
+            loss = loss + (reg * self.reg_interval)
 
         stats['G_loss'] = loss.item()
         self.update_count()
