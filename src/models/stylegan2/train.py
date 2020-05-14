@@ -101,11 +101,11 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
     if G_ema is not None:
         ema_rounds = smooth_opts.get('upd_interval', 1)
         smooth_num_images = smooth_opts.get('num_kimg', 10.0) * 1000
-        ema_beta = 0.5 ** (batch_size / smooth_num_images)
-        ema_beta **= ema_rounds
-        log.info("Using exponential moving average of G weights with decay rate %.06f "
-                 "and update interval %d steps" % (ema_beta, ema_rounds))
-        ema_weight = 1 - ema_beta
+        beta = 0.5 ** (batch_size / smooth_num_images)
+        beta **= ema_rounds
+        log.info("Using exponential moving average of G weights with beta %.06f "
+                 "and update interval %d steps" % (beta, ema_rounds))
+        ema_weight = 1 - beta
 
     G_ = G.module if hasattr(G, 'module') else G
     D_ = D.module if hasattr(D, 'module') else D

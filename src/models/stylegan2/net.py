@@ -1,5 +1,4 @@
 import math
-import numpy as np
 import random
 import torch
 import torch.nn.functional as F
@@ -169,8 +168,8 @@ class SynthesisNet(nn.Module):
         self.res_log2 = res_log2
 
         def nf(stage):
-            fmaps = int(fmap_base / (2.0 ** (stage * fmap_decay)))
-            return np.clip(fmaps, fmap_min, fmap_max)
+            fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
+            return int(min(max(fmaps, fmap_min), fmap_max))
 
         main = [StyledLayer(nf(1), nf(1), style_dim)]
         outs = [ToRGB(nf(1), img_channels, style_dim)]
@@ -316,8 +315,8 @@ class Discriminator(nn.Module):
             self.weight_blur = None
 
         def nf(stage: int):
-            fmaps = int(fmap_base / (2.0 ** (stage * fmap_decay)))
-            return int(np.clip(fmaps, fmap_min, fmap_max))
+            fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
+            return int(min(max(fmaps, fmap_min), fmap_max))
 
         inp = FromRGB(img_channels, nf(res_log2 - 1))
         main = [ResidualBlock(nf(res - 1), nf(res - 2), impl=impl,
