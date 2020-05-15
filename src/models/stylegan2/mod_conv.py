@@ -215,11 +215,10 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         x = x.view(1, N * C0, H0, W0)
         return self._exec(x, w)
 
-    def forward(self, x, style):
+    def forward(self, x: Tensor, style: Tensor) -> Tensor:
         x = self.conv2d_forward(x, style, self.weight * self.weight_mult)
         if self.bias is not None:
-            bias = self.bias * self.lr_mult
-            x += bias[:, None, None]
+            x = x.add(self.lr_mult, self.bias[:, None, None])
         return x
 
 
@@ -236,6 +235,6 @@ class Conv2d_Downsample(nn.Module, BlurWeightsMixin):
         self.pad0 = (p + 1) // 2
         self.pad1 = p // 2
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
         return self.conv(x)

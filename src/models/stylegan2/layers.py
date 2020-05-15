@@ -29,10 +29,10 @@ def equalized_lr_init(weight: Tensor, bias: Tensor, scale_weights=True,
 
 class EqualizedLRLeakyReLU(nn.LeakyReLU):
     def __init__(self, negative_slope=0.2, inplace=False, gain=math.sqrt(2)):
-        self.gain = gain
         super(EqualizedLRLeakyReLU, self).__init__(negative_slope, inplace)
+        self.register_buffer('gain', torch.tensor(gain))
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         if self.inplace:
             x = x.mul_(self.gain)
         else:
@@ -49,7 +49,7 @@ class AddRandomNoise(nn.Module):
     def reset_parameters(self):
         nn.init.zeros_(self.gain)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         N, C, H, W = x.shape
         noise = x.new_empty(N, 1, H, W).normal_()
         return x + noise * self.gain
@@ -65,7 +65,7 @@ class Input(nn.Module):
     def reset_parameters(self):
         nn.init.normal_(self.weight)
 
-    def forward(self, n):
+    def forward(self, n: int) -> Tensor:
         x = self.weight.repeat(n, 1, 1, 1)
         return x
 
@@ -80,12 +80,8 @@ class AddBias(nn.Module):
     def reset_parameters(self):
         nn.init.zeros_(self.bias)
 
-    def forward(self, x):
-        bias = self.bias * self.lr_mult
-        if x.ndim == 4:
-            bias = bias[:, None, None]
-        x += bias
-        return x
+    def forward(self, x: Tensor) -> Tensor:
+        return x.add(self.lr_mult, self.bias[:, None, None])
 
 
 class EqualizedLRLinear(nn.Linear):
@@ -136,7 +132,7 @@ class EqualizedLRConv2d(nn.Conv2d):
 
 
 class Normalize(nn.Module):
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         norm = torch.rsqrt(x.pow(2).mean(dim=1, keepdim=True) + 1e-8)
         return x * norm
 
@@ -150,7 +146,7 @@ class ConcatLabels(nn.Module):
     def reset_parameters(self):
         nn.init.normal_(self.linear.weight)
 
-    def forward(self, z, y):
+    def forward(self, z: Tensor, y: Tensor) -> Tensor:
         y = self.linear(y)
         return torch.cat([z, y], dim=1)
 
@@ -161,7 +157,7 @@ class ConcatMiniBatchStddev(nn.Module):
         self.group_size = group_size
         self.num_new_features = num_new_features
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         y = minibatch_stddev(x, group_size=self.group_size,
                              num_new_features=self.num_new_features)
         return torch.cat([x, y], dim=1)
@@ -172,7 +168,7 @@ class Lambda(nn.Module):
         super(Lambda, self).__init__()
         self.fn = fn
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         return self.fn(x)
 
 
