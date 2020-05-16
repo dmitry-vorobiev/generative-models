@@ -10,7 +10,7 @@ defaults:
   - dataset: simple
 
 general:
-  gpu: 1
+  gpu: 0
   seed: 333
 
 distributed:
