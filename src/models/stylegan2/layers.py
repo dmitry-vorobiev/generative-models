@@ -4,13 +4,13 @@ import torch
 import torch.nn.functional as F
 
 from torch import nn, Tensor
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .ops import minibatch_stddev
 
 
-def equalized_lr_init(weight: Tensor, bias: Tensor, scale_weights=True,
-                      lr_mult=1.0, transposed=False) -> float:
+def equalized_lr_init(weight, bias, scale_weights=True, lr_mult=1.0, transposed=False):
+    # type: (Tensor, Tensor, Optional[bool], Optional[float], Optional[bool]) -> float
     fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(weight)
     he_std = 1.0 / math.sqrt(fan_out if transposed else fan_in)
 
@@ -96,7 +96,7 @@ class EqualizedLRLinear(nn.Linear):
         self.w_mult = equalized_lr_init(
             self.weight, self.bias, self.scale_weights, self.lr_mult)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         weight = self.weight * self.w_mult
         bias = self.bias
         if bias is not None:
@@ -120,10 +120,11 @@ class EqualizedLRConv2d(nn.Conv2d):
             self.weight, self.bias, self.scale_weights, self.lr_mult)
 
     def conv2d_forward(self, x, weight, bias):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
         return F.conv2d(x, weight, bias, self.stride, self.padding,
                         self.dilation, self.groups)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         weight = self.weight * self.w_mult
         bias = self.bias
         if bias is not None:

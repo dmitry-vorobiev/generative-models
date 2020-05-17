@@ -24,7 +24,7 @@ To point the script to your local data folder you will have to update `data.root
 or pass it as a command line argument:
 
 ```shell script
-python src/train_gan.py data.root=/your/local/dir
+python src/train_gan.py data.root=/path/to/local/dir
 ```
 
 
@@ -34,6 +34,11 @@ Launch distributed training on GPUs:
 
 ```shell script
 python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py
+```
+
+Convert pretrained StyleGAN 2 weights:
+```shell script
+python src/convert_stylegan2_tf_weights.py -d ffhq-config-e -o /path/to/local/dir
 ```
 
 It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.

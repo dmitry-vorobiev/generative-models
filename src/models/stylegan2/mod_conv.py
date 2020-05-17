@@ -104,7 +104,6 @@ class BlurWeightsMixin(object):
 
         if isinstance(blur_kernel, Sequence):
             blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down)
-            # noinspection PyUnresolvedReferences
 
         if isinstance(blur_kernel, Tensor):
             C1, C0, Hb, Wb = blur_kernel.shape
