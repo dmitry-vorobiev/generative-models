@@ -39,14 +39,14 @@ model:
       p_style_mix: 0.9
       truncation_psi: 0.5
       truncation_cutoff: null
-      impl: torch
+      impl: ref
   D:
     class: models.stylegan2.net.Discriminator
     params:
       img_res: 128
       num_classes: 0
       fmap_base: 2048
-      impl: torch
+      impl: ref
 
 loss:
   G:

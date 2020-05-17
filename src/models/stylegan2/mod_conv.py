@@ -75,7 +75,7 @@ def upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
 def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
     k = torch.tensor(k, dtype=torch.float32, device=device)
     if k.ndim == 1:
-        k = k[:, None] * k[None, :]
+        k = k[:, None] @ k[None, :]
     k /= k.sum()
     return k
 
@@ -84,11 +84,7 @@ def setup_blur_weights(k: Sequence[int], up=0, down=0) -> Tensor:
     assert not (up and down)
     if k is None:
         k = [1] * (up or down)
-    if not isinstance(k, Sequence):
-        raise AttributeError("blur_kernel must be of type List, Tuple or None")
-    k = _setup_kernel(k)
-    if up:
-        k *= (up ** 2)
+    k = _setup_kernel(k) * max(1, up ** 2)
     # from _upfirdn_2d_ref:
     # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
     return torch.flip(k, dims=(0, 1))[None, None, :]
@@ -105,18 +101,21 @@ class BlurWeightsMixin(object):
     def _init_blur_weights(self, blur_kernel, up=0, down=0):
         if blur_kernel is None:
             blur_kernel = [1, 3, 3, 1]
-        if isinstance(blur_kernel, torch.Tensor):
+
+        if isinstance(blur_kernel, Sequence):
+            blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down)
+            # noinspection PyUnresolvedReferences
+
+        if isinstance(blur_kernel, Tensor):
             C1, C0, Hb, Wb = blur_kernel.shape
             assert C1 == 1 and C0 == 1 and Hb == Wb
-            # shared LPF weights, don't want to save as buffer here
-            self._weight_blur = blur_kernel
+            # noinspection PyUnresolvedReferences
+            self.register_buffer("_weight_blur", blur_kernel)
         elif hasattr(blur_kernel, "__call__"):
-            # a way to get a proper reference to the shared buffer
-            # after it has been moved to GPU
+            # a way to get a proper reference to the shared buffer after it has been moved to GPU
             self._weight_blur_func = blur_kernel
         else:
-            # noinspection PyUnresolvedReferences
-            self.register_buffer("_weight_blur", setup_blur_weights(blur_kernel, up=up, down=down))
+            raise AttributeError("blur_kernel must be of type Callable, List, Tuple or None")
 
     @property
     def weight_blur(self):

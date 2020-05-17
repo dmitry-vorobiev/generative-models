@@ -11,8 +11,10 @@ TensorMap = Mapping[str, Tensor]
 G = torch.nn.Module
 D = torch.nn.Module
 
-GLossFunc = Callable[[G, D, Tensor, Optional[Tensor], Optional[FloatDict]], Tensor]
-DLossFunc = Callable[[G, D, Tensor, Tensor, Optional[Tensor], Optional[FloatDict]], Tensor]
+LossWithStats = Tuple[Tensor, FloatDict]
+GLossFunc = Callable[[G, D, Tensor, Optional[Tensor], Optional[FloatDict]], LossWithStats]
+DLossFunc = Callable[[G, D, Tensor, Tensor, Optional[Tensor], Optional[FloatDict]], LossWithStats]
+
 
 TrainFunc = Callable[[int, Batch], FloatDict]
 SampleImages = Callable[[], Tensor]

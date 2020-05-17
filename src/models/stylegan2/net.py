@@ -11,13 +11,8 @@ from .layers import AddBias, AddRandomNoise, ConcatMiniBatchStddev, Input, Equal
     EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
 from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 
-Latent = Tensor
-Label = Optional[Tensor]
-DLatent = Tensor
 
-
-def _upsample_torch(x, factor):
-    # type: (Tensor, int) -> Tensor
+def _upsample_torch(x: Tensor, factor: int) -> Tensor:
     return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
 
 
@@ -55,7 +50,7 @@ class StyledLayer(nn.Module):
         self.add_noise = AddRandomNoise()
         self.act_fn = EqualizedLRLeakyReLU(inplace=True)
 
-    def forward(self, x: Tensor, w: DLatent) -> Tensor:
+    def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
         x = self.conv(x, y)
         x = self.act_fn(self.add_noise(x))
@@ -68,7 +63,7 @@ class ToRGB(nn.Module):
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=1, demodulate=False)
 
-    def forward(self, x: Tensor, w: DLatent) -> Tensor:
+    def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
         x = self.conv(x, y)
         return x
@@ -111,25 +106,26 @@ class ResidualBlock(nn.Module):
 
 class MappingNet(nn.Module):
     def __init__(self, latent_dim=512, num_classes=0, style_dim=512,
-                 num_layers=8, hidden_dim=512, lr_mult=0.01, normalize=True):
+                 num_layers=8, hidden_dim=512, lr_mult=0.01, normalize_latent=True):
         super(MappingNet, self).__init__()
         in_fmaps = latent_dim
-        self.embed_labels = None
+        self.cat_label = None
         if num_classes > 0:
-            self.embed_labels = ConcatLabels(num_classes, latent_dim)
+            self.cat_label = ConcatLabels(num_classes, latent_dim)
             in_fmaps = latent_dim * 2
 
-        layers = [Normalize()] if normalize else []
+        layers = [Normalize()] if normalize_latent else []
         features = [in_fmaps] + [hidden_dim] * (num_layers - 1) + [style_dim]
         for i in range(num_layers):
             layers += [EqualizedLRLinear(features[i], features[i + 1], lr_mult=lr_mult),
                        EqualizedLRLeakyReLU(inplace=True)]
-        self.mapping = nn.Sequential(*layers)
+        self.layers = nn.Sequential(*layers)
 
-    def forward(self, z: Latent, label: Label = None):
-        if self.embed_labels:
-            z = self.embed_labels(z, label)
-        return self.mapping(z)
+    def forward(self, z, label=None):
+        # type: (Tensor, Optional[Tensor]) -> Tensor
+        if self.cat_label is not None:
+            z = self.cat_label(z, label)
+        return self.layers(z)
 
 
 class SynthesisNet(nn.Module):
@@ -192,7 +188,7 @@ class SynthesisNet(nn.Module):
     def _upsample_ref(self, x: Tensor) -> Tensor:
         return upfirdn_2d_opt(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
-    def forward(self, w: DLatent) -> Tensor:
+    def forward(self, w: Tensor) -> Tensor:
         x = self.input(w.size(1))
         y = None
         for i, layer in enumerate(self.main):
@@ -210,11 +206,11 @@ class Generator(nn.Module):
     def __init__(self, img_res=1024, img_channels=3, num_classes=0, latent_dim=512, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
                  num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
-                 p_style_mix=0.9, w_ema_decay=0.995, truncation_psi=0.5, truncation_cutoff=None,
-                 impl="ref"):
+                 p_style_mix=0.9, w_avg_beta=0.995, truncation_psi=0.5, truncation_cutoff=None,
+                 impl="ref", blur_kernel=None):
         super(Generator, self).__init__()
-        if w_ema_decay >= 1.0 or w_ema_decay <= 0.0:
-            w_ema_decay = None
+        if w_avg_beta >= 1.0 or w_avg_beta <= 0.0:
+            w_avg_beta = None
         if p_style_mix <= 0.0:
             p_style_mix = None
         if truncation_psi >= 1.0:
@@ -225,14 +221,15 @@ class Generator(nn.Module):
 
         self.mapping = MappingNet(
             latent_dim, num_classes, style_dim, num_layers=num_mapping_layers,
-            hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize=normalize_latent)
+            hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize_latent=normalize_latent)
 
         self.synthesis = SynthesisNet(
-            img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max, impl)
+            img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max,
+            impl, blur_kernel)
 
         self.p_style_mix = p_style_mix
 
-        self.w_ema_decay = w_ema_decay
+        self.w_avg_beta = w_avg_beta
         self.register_buffer('w_avg', torch.zeros(style_dim))
 
         self.truncation_psi = truncation_psi
@@ -242,11 +239,12 @@ class Generator(nn.Module):
     def num_layers(self) -> int:
         return self.synthesis.num_layers
 
-    def w_ema_step(self, w: Tensor):
+    def update_w_avg(self, w: Tensor):
         with torch.no_grad():
-            self.w_avg = torch.lerp(w.mean(0), self.w_avg, self.w_ema_decay)
+            self.w_avg = torch.lerp(w.mean(0), self.w_avg, self.w_avg_beta)
 
-    def mix_styles(self, z1: Latent, label: Label, w1: DLatent) -> DLatent:
+    def mix_styles(self, z1, w1, label=None):
+        # type: (Tensor, Tensor, Optional[Tensor]) -> Tensor
         num_layers = self.num_layers
         if random.uniform(0, 1) < self.p_style_mix:
             mix_cutoff = int(random.uniform(1, num_layers))
@@ -259,7 +257,7 @@ class Generator(nn.Module):
         mask = (layer_idx < mix_cutoff)[:, None, None]
         return torch.where(mask, w1, w2)
 
-    def truncate(self, w: DLatent) -> DLatent:
+    def truncate(self, w: Tensor) -> Tensor:
         assert w.ndim == 2, "w: layer axis will be added by this op"
         layer_psi = torch.ones(self.num_layers, device=w.device)
         if self.truncation_cutoff is None:
@@ -271,14 +269,15 @@ class Generator(nn.Module):
         w = torch.lerp(self.w_avg[None, None, :], w[None, :], weight=layer_psi[:, None, None])
         return w
 
-    def forward(self, z: Latent, label: Label = None) -> Tuple[Tensor, Tensor]:
+    def forward(self, z, label=None):
+        # type: (Tensor, Optional[Tensor]) -> Tuple[Tensor, Tensor]
         w = self.mapping(z, label)
 
         if self.training:
-            if self.w_ema_decay:
-                self.w_ema_step(w)
+            if self.w_avg_beta:
+                self.update_w_avg(w)
             if self.p_style_mix:
-                w = self.mix_styles(z, label, w)
+                w = self.mix_styles(z, w, label)
         else:
             if self.truncation_psi:
                 w = self.truncate(w)

@@ -1,11 +1,10 @@
 import logging
 import torch
-import torch.nn.functional as F
 
 from functools import partial
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from .net import Discriminator, Generator
 from my_types import Batch, Device, DLossFunc, FloatDict, GLossFunc, SampleImages, TrainFunc

@@ -46,7 +46,7 @@ def log_iter(engine, pbar, interval_steps=100):
     # TODO: use timers from ignite / ignite.contrib, add GPU memory info
     it_time = (t1 - t0) / interval_steps
     cur_time = humanize_time(t1)
-    pbar.log_message("[{}][{:.2f} s] | ep: {:2d}, it: {:3d}, {}".format(
+    pbar.log_message("[{}][{:.3f} s] | ep: {:2d}, it: {:3d}, {}".format(
         cur_time, it_time, epoch, iteration, stats))
     engine.state.t0 = t1
 

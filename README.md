@@ -47,6 +47,11 @@ Some parts of this work are derivatives and as such they are licensed under the 
 [NVIDIA's license (.txt)](https://github.com/NVlabs/stylegan2/blob/master/LICENSE.txt), 
 [NVIDIA's license (.html)](https://nvlabs.github.io/stylegan2/license.html)
 
+Script for porting Tensorflow weights to PyTorch was borrowed from 
+[Tetratrio/stylegan2_pytorch](https://github.com/Tetratrio/stylegan2_pytorch) repo. 
+[Original license](https://github.com/Tetratrio/stylegan2_pytorch/blob/master/LICENSE.txt).
+
+
 ## Citation
 
 ```

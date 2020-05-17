@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from torch import autograd, nn, Tensor
 from typing import Optional, Union, Tuple
 
-from .net import Discriminator, Generator, Latent, Label
-from my_types import FloatDict
+from .net import Discriminator, Generator
+from my_types import FloatDict, LossWithStats
 
 
 def r1_penalty(real_pred: Tensor, real_img: Tensor, reduce_mean=True) -> Tensor:
@@ -41,7 +41,7 @@ class D_LogisticLoss_R1(nn.Module):
         return dict(D_loss=0.0, D_r1=0.0, D_real=0.0, D_fake=0.0)
 
     def forward(self, G, D, reals, z, label=None, stats=None):
-        # type: (Generator, Discriminator, Tensor, Latent, Label, Optional[FloatDict]) -> Tuple[Tensor, FloatDict]
+        # type: (Generator, Discriminator, Tensor, Tensor, Tensor, Optional[FloatDict]) -> LossWithStats
         if stats is None:
             stats = self.zero_stats()
 
@@ -116,7 +116,7 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
         return dict(G_loss=0.0, G_pl=0.0, G_fake=0.0)
 
     def forward(self, G, D, z, label=None, stats=None):
-        # type: (Generator, Discriminator, Latent, Label, Optional[FloatDict]) -> Tuple[Tensor, FloatDict]
+        # type: (Generator, Discriminator, Tensor, Tensor, Optional[FloatDict]) -> LossWithStats
         if stats is None:
             stats = self.zero_stats()
 
