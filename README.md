@@ -30,6 +30,7 @@ python src/train_gan.py data.root=/path/to/local/dir
 
 ## Usage
 
+##### Multi-GPU training
 Launch distributed training on GPUs:
 
 ```shell script
@@ -37,7 +38,9 @@ python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py
 ```
 
 It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.
+<br><br>
 
+##### Convert StyleGAN 2 TF weights
 Convert pretrained StyleGAN 2 weights from official TF distribution:
 
 ```shell script
