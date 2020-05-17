@@ -36,12 +36,13 @@ Launch distributed training on GPUs:
 python -m torch.distributed.launch --nproc_per_node=2 --use_env src/train_gan.py
 ```
 
-Convert pretrained StyleGAN 2 weights:
+It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.
+
+Convert pretrained StyleGAN 2 weights from official TF distribution:
+
 ```shell script
 python src/convert_stylegan2_tf_weights.py -d ffhq-config-e -o /path/to/local/dir
 ```
-
-It's important to run `torch.distributed.launch` with `--use_env`, otherwise [hydra](https://github.com/facebookresearch/hydra) will yell at you for passing unrecognized arguments.
 
 ## License
 
