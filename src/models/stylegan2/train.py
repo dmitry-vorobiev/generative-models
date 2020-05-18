@@ -14,14 +14,16 @@ Options = Optional[Mapping[str, Any]]
 log = logging.getLogger(__name__)
 
 
-# TODO: how to properly handle buffers?
-def ema_step(G, G_ema, weight=0.001):
+def update_G_ema(G, G_ema, weight=0.001):
     # type: (Generator, Generator, float) -> None
-    curr_state = dict(G.named_parameters(recurse=True))
     with torch.no_grad():
-        for name, param in G_ema.named_parameters(recurse=True):
-            curr_value = curr_state[name].to(param.device)
+        for param, curr_value in zip(G_ema.parameters(), G.parameters()):
+            curr_value = curr_value.to(param.device)
             param.lerp_(curr_value, weight)
+
+        # No point to iterate over all buffers, most of them doesn't change their values
+        w_avg = G_ema.w_avg
+        w_avg.copy_(G.w_avg.to(w_avg.device))
 
 
 def sample_latent(batch_size, dim, device=None):
@@ -71,7 +73,7 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
             # Average G weights
             if G_ema is not None:
                 if not iteration % ema_rounds:
-                    ema_step(G_, G_ema, ema_weight)
+                    update_G_ema(G_, G_ema, ema_weight)
 
         # Training discriminator
         if not iteration % rounds:

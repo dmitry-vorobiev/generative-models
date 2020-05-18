@@ -153,6 +153,11 @@ def convert_from_tf(tf_state):
         G = Generator(impl='ref', **kwargs)
         G.requires_grad_(False)
 
+        for var_name, var in tf_state.variables:
+            if 'dlatent_avg' in var_name:
+                G.w_avg.copy_(torch.from_numpy(var))
+                break
+
         for name, param in G.mapping.named_parameters(recurse=True):
             value = params_mapping[name]
             param.copy_(value)
@@ -281,9 +286,10 @@ def parse_G_synthesis(tf_state):
             params[f'{torch_pref}.add_noise.gain'] = torch.tensor(
                 values[f'{tf_pref}/noise_strength'])
 
-    params['input.weight'] = torch.from_numpy(conv_vars[2]['Const/const'])
-    convert_layer(conv_vars[2], f'main.0', 'Conv', noise=True)
-    convert_layer(conv_vars[2], f'outs.0', 'ToRGB')
+    early_layers = conv_vars[2]
+    params['input.weight'] = torch.from_numpy(early_layers['Const/const'])
+    convert_layer(early_layers, 'main.0', 'Conv', noise=True)
+    convert_layer(early_layers, 'outs.0', 'ToRGB')
 
     for i in range(3, max(conv_vars.keys()) + 1):
         idx = (i - 3) * 2 + 1
