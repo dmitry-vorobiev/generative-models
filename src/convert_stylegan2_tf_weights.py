@@ -37,7 +37,10 @@ import re
 import requests
 import torch
 
-from models.stylegan2.net import Generator
+from torch import Tensor
+from typing import Any, Dict, Mapping, Tuple
+
+from models.stylegan2.net import Discriminator, Generator
 
 SUPPORTED_MODELS = ['G_main', 'G_mapping', 'G_synthesis_stylegan2', 'D_stylegan2']
 
@@ -114,13 +117,26 @@ def load_tf_models_url(url):
             return Unpickler(fp).load()
 
 
+def stringify(d: dict) -> str:
+    key_values = ["{}: {}".format(k, v) for k, v in d.items()]
+    return ", ".join(key_values)
+
+
 def error_if_unsupported(tf_class_name):
     if tf_class_name not in SUPPORTED_MODELS:
         raise AttributeError('Found model type {}. Allowed model types are: {}'
                              .format(tf_class_name, SUPPORTED_MODELS))
 
 
+def handle_act_func_kwargs(kwargs: dict, key="nonlinearity"):
+    if key in kwargs:
+        if kwargs[key] != 'lrelu':
+            raise ValueError("Found unsupported activation fn: {}".format(kwargs[key]))
+        del kwargs[key]
+
+
 def convert_kwargs(static_kwargs, mappings):
+    # type: (Dict[str, Any], Mapping[str, str]) -> Dict[str, Any]
     kwargs = dict()
     for key, value in static_kwargs.items():
         if key in mappings:
@@ -129,7 +145,7 @@ def convert_kwargs(static_kwargs, mappings):
     return kwargs
 
 
-def convert_from_tf(tf_state):
+def convert_from_tf(tf_state) -> torch.nn.Module:
     tf_state = AttributeDict.convert_dict_recursive(tf_state)
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
@@ -158,29 +174,97 @@ def convert_from_tf(tf_state):
                 G.w_avg.copy_(torch.from_numpy(var))
                 break
 
-        for name, param in G.mapping.named_parameters(recurse=True):
+        for name, param in G.mapping.named_parameters():
             value = params_mapping[name]
             param.copy_(value)
 
-        for name, param in G.synthesis.named_parameters(recurse=True):
+        for name, param in G.synthesis.named_parameters():
             value = params_synthesis[name]
             param.copy_(value)
 
-        print('Generator attributes: {}'.format(kwargs))
+        print('{} attributes: {}'.format(tf_state.name, stringify(kwargs)))
         return G
 
-    return model_type
+    if model_type == 'D_stylegan2':
+        output_vars = {}
+        conv_vars = {}
+        for var_name, var in tf_state.variables:
+            if var_name.startswith('Output'):
+                output_vars[var_name[7:]] = var  # len('Output/'): 7
+            else:
+                group_vars_by_res_log2(conv_vars, var_name, var)
+
+        kwargs = convert_kwargs(tf_state.static_kwargs, {
+            'num_channels': 'img_channels',
+            'resolution': 'img_res',
+            'label_size': 'num_classes',
+            'fmap_base': 'fmap_base',
+            'fmap_decay': 'fmap_decay',
+            'fmap_min': 'fmap_min',
+            'fmap_max': 'fmap_max',
+            'mbstd_group_size': 'mbstd_group_size',
+            'mbstd_num_features': 'mbstd_num_features',
+            'nonlinearity': 'nonlinearity',
+            'resample_kernel': 'blur_kernel',
+        })
+        handle_act_func_kwargs(kwargs)
+        params = dict()
+
+        def convert_layer(values, torch_pref, tf_pref, has_bias=True, tfm_weight=conv_weight):
+            params[f'{torch_pref}.weight'] = tfm_weight(values[tf_pref + 'weight'])
+            if has_bias:
+                params[f'{torch_pref}.bias'] = bias(values[tf_pref + 'bias'])
+
+        res_log2 = max(conv_vars.keys())
+        convert_layer(conv_vars[res_log2], 'layers.0.conv', 'FromRGB/')
+
+        for i in range(3, res_log2 + 1):
+            idx = res_log2 - i + 1
+            vars_i = conv_vars[i]
+            convert_layer(vars_i, f'layers.{idx}.conv.0', 'Conv0/')
+            convert_layer(vars_i, f'layers.{idx}.conv.2.conv', 'Conv1_down/')
+            convert_layer(vars_i, f'layers.{idx}.skip.0.conv', 'Skip/', has_bias=False)
+
+        convert_layer(conv_vars[2], f'layers.{res_log2}', 'Conv/')
+        convert_layer(conv_vars[2], f'layers.{res_log2 + 3}', 'Dense0/', tfm_weight=linear_weight)
+        convert_layer(output_vars, f'layers.{res_log2 + 5}', '', tfm_weight=linear_weight)
+
+        D = Discriminator(impl='ref', **kwargs)
+        D.requires_grad_(False)
+
+        for name, param in D.named_parameters():
+            value = params[name]
+            assert value.shape == param.shape
+            param.copy_(value)
+
+        print('{} attributes: {}'.format(tf_state.name, stringify(kwargs)))
+        return D
+
+    raise NotImplementedError(model_type)
 
 
-def bias(b):
+def group_vars_by_res_log2(conv_vars, var_name, var):
+    # type: (Dict[int, Dict[str, Tensor]], str, 'np.ndarray') -> None
+    match = re.search('(\d+)x[0-9]+/*', var_name)
+    res = int(match.groups()[0])
+    res_log2 = int(math.log2(res))
+
+    if res_log2 not in conv_vars:
+        conv_vars[res_log2] = dict()
+
+    var_name = var_name.replace('{}x{}/'.format(res, res), '')
+    conv_vars[res_log2][var_name] = var
+
+
+def bias(b) -> Tensor:
     return torch.from_numpy(b)
 
 
-def linear_weight(weight):
+def linear_weight(weight) -> Tensor:
     return torch.from_numpy(weight.T).contiguous()
 
 
-def conv_weight(weight, transposed=False):
+def conv_weight(weight, transposed=False) -> Tensor:
     dims = [2, 3, 0, 1] if transposed else [3, 2, 0, 1]
     w = torch.from_numpy(weight).permute(*dims)
     if transposed:
@@ -188,8 +272,7 @@ def conv_weight(weight, transposed=False):
     return w.contiguous()
 
 
-def parse_G_mapping(tf_state):
-    tf_state = AttributeDict.convert_dict_recursive(tf_state)
+def parse_G_mapping(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, Tensor]]:
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
 
@@ -200,14 +283,9 @@ def parse_G_mapping(tf_state):
         'mapping_layers': 'num_mapping_layers',
         'mapping_fmaps': 'mapping_hidden_dim',
         'normalize_latents': 'normalize_latent',
-        'mapping_nonlinearity': 'mapping_nonlinearity',
+        'mapping_nonlinearity': 'nonlinearity',
     })
-
-    if 'mapping_nonlinearity' in kwargs:
-        act_fn = kwargs['mapping_nonlinearity']
-        if act_fn != 'lrelu':
-            raise ValueError("Found unsupported activation fn: {}".format(act_fn))
-        del kwargs['mapping_nonlinearity']
+    handle_act_func_kwargs(kwargs)
 
     norm_latents = True
     if 'normalize_latent' in kwargs:
@@ -233,8 +311,7 @@ def parse_G_mapping(tf_state):
     return kwargs, params
 
 
-def parse_G_synthesis(tf_state):
-    tf_state = AttributeDict.convert_dict_recursive(tf_state)
+def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, Tensor]]:
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
 
@@ -249,53 +326,41 @@ def parse_G_synthesis(tf_state):
         'nonlinearity': 'nonlinearity',
         'resample_kernel': 'blur_kernel',
     })
-
-    if 'nonlinearity' in kwargs:
-        act_fn = kwargs['nonlinearity']
-        if act_fn != 'lrelu':
-            raise ValueError("Found unsupported activation fn: {}".format(act_fn))
-        del kwargs['nonlinearity']
+    handle_act_func_kwargs(kwargs)
 
     params = dict()
     conv_vars = dict()
 
     for var_name, var in tf_state.variables:
         if var_name.startswith('noise'):
+            # TODO: add support for static noise first
             continue
         else:
-            match = re.search('(\d+)x[0-9]+/*', var_name)
-            res = int(match.groups()[0])
-            res_log2 = int(math.log2(res))
-
-            if res_log2 not in conv_vars:
-                conv_vars[res_log2] = dict()
-
-            var_name = var_name.replace('{}x{}/'.format(res, res), '')
-            conv_vars[res_log2][var_name] = var
+            group_vars_by_res_log2(conv_vars, var_name, var)
 
     def convert_layer(values, torch_pref, tf_pref, noise=False, up=False):
         mod_name = f'{torch_pref}.style'
-        params[f'{mod_name}.weight'] = linear_weight(values[f'{tf_pref}/mod_weight'])
-        params[f'{mod_name}.bias'] = bias(values[f'{tf_pref}/mod_bias']) + 1
+        params[f'{mod_name}.weight'] = linear_weight(values[tf_pref + 'mod_weight'])
+        params[f'{mod_name}.bias'] = bias(values[tf_pref + 'mod_bias']) + 1
 
         conv_name = f'{torch_pref}.conv'
-        params[f'{conv_name}.weight'] = conv_weight(values[f'{tf_pref}/weight'], transposed=up)
-        params[f'{conv_name}.bias'] = bias(values[f'{tf_pref}/bias'])
+        params[f'{conv_name}.weight'] = conv_weight(values[tf_pref + 'weight'], transposed=up)
+        params[f'{conv_name}.bias'] = bias(values[tf_pref + 'bias'])
 
         if noise:
-            params[f'{torch_pref}.add_noise.gain'] = torch.tensor(
-                values[f'{tf_pref}/noise_strength'])
+            noise_name = f'{torch_pref}.add_noise.gain'
+            params[noise_name] = torch.tensor(values[tf_pref + 'noise_strength'])
 
     early_layers = conv_vars[2]
     params['input.weight'] = torch.from_numpy(early_layers['Const/const'])
-    convert_layer(early_layers, 'main.0', 'Conv', noise=True)
-    convert_layer(early_layers, 'outs.0', 'ToRGB')
+    convert_layer(early_layers, 'main.0', 'Conv/', noise=True)
+    convert_layer(early_layers, 'outs.0', 'ToRGB/')
 
     for i in range(3, max(conv_vars.keys()) + 1):
         idx = (i - 3) * 2 + 1
-        for j, (tf_pref, idx) in enumerate(zip(['Conv0_up', 'Conv1'], [idx, idx + 1])):
+        for j, (tf_pref, idx) in enumerate(zip(['Conv0_up/', 'Conv1/'], [idx, idx + 1])):
             convert_layer(conv_vars[i], f'main.{idx}', tf_pref, noise=True, up=(j == 0))
-        convert_layer(conv_vars[i], f'outs.{i - 2}', 'ToRGB')
+        convert_layer(conv_vars[i], f'outs.{i - 2}', 'ToRGB/')
 
     return kwargs, params
 
@@ -320,11 +385,12 @@ def main():
     args = get_arg_parser().parse_args()
     input_path = args.input
     model_name = args.download
-    save_path = args.output
+    save_paths = args.output
 
-    if not (bool(input_path) or bool(model_name)):
-        raise AttributeError('Incorrect input format. One of the [-i, --input] or [-d, --download] '
-                             'args must be specified.')
+    if not any([input_path, model_name]):
+        raise AttributeError(
+            'Incorrect input format. One of the [-i, --input] or [-d, --download] '
+            'args must be specified.')
 
     if bool(input_path) == bool(model_name):
         raise AttributeError(
@@ -344,22 +410,25 @@ def main():
     print('Converting tensorflow models and saving them...')
     converted = [convert_from_tf(tf_state) for tf_state in unpickled]
 
-    if len(save_path) == 1:
-        save_path = save_path[0]
-        if os.path.isdir(save_path) or not os.path.splitext(save_path)[-1]:
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
-            for tf_state, torch_model in zip(unpickled, converted):
-                path = os.path.join(save_path, tf_state['name'] + '.pth')
-                if isinstance(torch_model, torch.nn.Module):
-                    torch.save(torch_model.state_dict(), path)
-    else:
-        if len(save_path) != len(converted):
-            raise AttributeError('Found {} models in pickled file but only {} output paths '
-                                 'were given.'.format(len(converted), len(save_path)))
-        for out_path, torch_model in zip(save_path, converted):
-            if isinstance(torch_model, torch.nn.Module):
-                torch.save(torch_model.state_dict(), out_path)
+    if len(save_paths) == 1:
+        dir_path = save_paths[0]
+        if os.path.isfile(dir_path) or os.path.splitext(dir_path)[-1]:
+            raise AttributeError(
+                'Please specify correct directory to save output files '
+                'or provide a list of paths for each file')
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+        save_paths = [os.path.join(dir_path, tf_state['name'] + '.pth')
+                      for tf_state in unpickled]
+
+    if len(save_paths) != len(converted):
+        raise AttributeError(
+            'Found {} models in pickled file but only {} output paths '
+            'were given.'.format(len(converted), len(save_paths)))
+
+    for out_path, torch_model in zip(save_paths, converted):
+        torch.save(torch_model.state_dict(), out_path)
+
     print('Done!')
 
 

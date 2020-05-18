@@ -163,7 +163,7 @@ class SynthesisNet(nn.Module):
 
         self.res_log2 = res_log2
 
-        def nf(stage):
+        def nf(stage: int) -> int:
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
             return int(min(max(fmaps, fmap_min), fmap_max))
 
@@ -313,7 +313,7 @@ class Discriminator(nn.Module):
         else:
             self.weight_blur = None
 
-        def nf(stage: int):
+        def nf(stage: int) -> int:
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
             return int(min(max(fmaps, fmap_min), fmap_max))
 
@@ -334,7 +334,7 @@ class Discriminator(nn.Module):
         self.layers = nn.Sequential(inp, *main, *out)
 
     def forward(self, image, label=None):
-        # type: (Tensor, Label) -> Tensor
+        # type: (Tensor, Optional[Tensor]) -> Tensor
         x = self.layers(image)
         if label is not None:
             label = F.one_hot(label, num_classes=self.num_classes)
