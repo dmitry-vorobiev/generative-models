@@ -105,6 +105,20 @@ class ResidualBlock(nn.Module):
 
 
 class MappingNet(nn.Module):
+    r"""
+    Mapping network.
+    Transforms the input latent code (z) to the disentangled latent code (w).
+    Used in configs B-F (Table 1).
+
+    Args:
+        latent_dim: Latent vector (Z) dimensionality.
+        num_classes: Label dimensionality, 0 if no labels.
+        style_dim: Disentangled latent (W) dimensionality.
+        num_layers: Number of mapping layers.
+        hidden_dim: Number of activations in the mapping layers.
+        lr_mult: Learning rate multiplier for the mapping layers.
+        normalize_latent: Normalize latent vectors (Z) before feeding them to the mapping layers?
+    """
     def __init__(self, latent_dim=512, num_classes=0, style_dim=512,
                  num_layers=8, hidden_dim=512, lr_mult=0.01, normalize_latent=True):
         super(MappingNet, self).__init__()
@@ -129,6 +143,22 @@ class MappingNet(nn.Module):
 
 
 class SynthesisNet(nn.Module):
+    r"""
+    StyleGAN2 synthesis network (Figure 7).
+    Implements skip connections (Figure 7), but no progressive growing.
+    Used in configs E-F (Table 1).
+
+    Args:
+        img_res: Output resolution.
+        img_channels: Number of output color channels.
+        style_dim: Disentangled latent (W) dimensionality.
+        fmap_base: Overall multiplier for the number of feature maps.
+        fmap_decay: log2 feature map reduction when doubling the resolution.
+        fmap_min: Minimum number of feature maps in any layer.
+        fmap_max: Maximum number of feature maps in any layer.
+        impl: Implementation of upsample_conv ops
+        blur_kernel: Low-pass filter to apply when resampling activations (only for `ref` impl).
+    """
     def __init__(self, img_res=1024, img_channels=3, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
                  impl="ref", blur_kernel=None):
@@ -203,9 +233,35 @@ class SynthesisNet(nn.Module):
 
 
 class Generator(nn.Module):
+    r"""
+    Main generator network.
+    Composed of two sub-networks (mapping and synthesis).
+    Used in configs B-F (Table 1).
+
+    Args:
+        img_res: Output resolution.
+        img_channels: Number of output color channels.
+        num_classes: Label dimensionality, 0 if no labels.
+        latent_dim: Latent vector (Z) dimensionality.
+        style_dim: Disentangled latent (W) dimensionality.
+        fmap_base: Overall multiplier for the number of feature maps.
+        fmap_decay: log2 feature map reduction when doubling the resolution.
+        fmap_min: Minimum number of feature maps in any layer.
+        fmap_max: Maximum number of feature maps in any layer.
+        num_mapping_layers: Number of mapping layers.
+        mapping_hidden_dim: Number of activations in the mapping layers.
+        mapping_lr_mult: Learning rate multiplier for the mapping layers.
+        normalize_latent: Normalize latent vectors (Z) before feeding them to the mapping layers?
+        p_style_mix: Probability of mixing styles during training. None = disable.
+        w_avg_beta: Decay for tracking the moving average of W during training. None = disable.
+        truncation_psi: Style strength multiplier for the truncation trick. None = disable.
+        truncation_cutoff: Number of layers for which to apply the truncation trick. None = all layers.
+        impl: Implementation of upsample_conv ops
+        blur_kernel: Low-pass filter to apply when resampling activations (only for `ref` impl).
+    """
     def __init__(self, img_res=1024, img_channels=3, num_classes=0, latent_dim=512, style_dim=512,
-                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
-                 num_mapping_layers=8, mapping_hidden_dim=512, normalize_latent=True,
+                 fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512, num_mapping_layers=8,
+                 mapping_hidden_dim=512, mapping_lr_mult=0.01, normalize_latent=True,
                  p_style_mix=0.9, w_avg_beta=0.995, truncation_psi=0.5, truncation_cutoff=None,
                  impl="ref", blur_kernel=None):
         super(Generator, self).__init__()
@@ -220,8 +276,8 @@ class Generator(nn.Module):
         self.num_classes = num_classes
 
         self.mapping = MappingNet(
-            latent_dim, num_classes, style_dim, num_layers=num_mapping_layers,
-            hidden_dim=mapping_hidden_dim, lr_mult=0.01, normalize_latent=normalize_latent)
+            latent_dim, num_classes, style_dim, num_mapping_layers, mapping_hidden_dim,
+            mapping_lr_mult, normalize_latent)
 
         self.synthesis = SynthesisNet(
             img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max,
@@ -274,12 +330,12 @@ class Generator(nn.Module):
         w = self.mapping(z, label)
 
         if self.training:
-            if self.w_avg_beta:
+            if self.w_avg_beta is not None:
                 self.update_w_avg(w)
-            if self.p_style_mix:
+            if self.p_style_mix is not None:
                 w = self.mix_styles(z, w, label)
         else:
-            if self.truncation_psi:
+            if self.truncation_psi is not None:
                 w = self.truncate(w)
 
         if w.ndim == 2:
@@ -288,6 +344,24 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
+    r"""
+    StyleGAN2 discriminator (Figure 7).
+    Implements residual nets (Figure 7), but no progressive growing.
+    Used in configs E-F (Table 1).
+
+    Args:
+        img_res: Input resolution.
+        img_channels: Number of input color channels.
+        num_classes: Dimensionality of the labels, 0 if no labels.
+        fmap_base: Overall multiplier for the number of feature maps.
+        fmap_decay: log2 feature map reduction when doubling the resolution.
+        fmap_min: Minimum number of feature maps in any layer.
+        fmap_max: Maximum number of feature maps in any layer.
+        mbstd_group_size: Group size for the minibatch standard deviation layer, 0 = disable.
+        mbstd_num_features: Number of features for the minibatch standard deviation layer.
+        impl: Implementation of conv_downsample ops
+        blur_kernel: Low-pass filter to apply when resampling activations. (only for `ref` impl)
+    """
     def __init__(self, img_res=1024, img_channels=3, num_classes=0, fmap_base=16 << 10,
                  fmap_decay=1.0, fmap_min=1, fmap_max=512, mbstd_group_size=4,
                  mbstd_num_features=1, impl="ref", blur_kernel=None):
