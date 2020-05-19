@@ -72,21 +72,25 @@ class D_LogisticLoss_R1(nn.Module):
 
 def path_length(fake_img: Tensor, fake_w: Tensor) -> Tensor:
     N, C, H, W = fake_img.shape
-    noise = torch.randn_like(fake_img) / math.sqrt(H * W)
-    grad, = autograd.grad((fake_img * noise).sum(), fake_w, create_graph=True)
-    # fake_w: (L, N, S)
-    return torch.sqrt(grad.pow(2).sum(dim=2, keepdim=True).mean(dim=0))
+    # Compute |J*y|.
+    pl_noise = torch.randn_like(fake_img).div_(math.sqrt(H * W))
+    pl_grad, = autograd.grad(torch.sum(fake_img * pl_noise), fake_w, create_graph=True)
+    # fake_w comes in shape (L, N, S).
+    # Summing style_dim (dlatent) and averaging across all layers.
+    return torch.sqrt(pl_grad.pow(2).sum(dim=2, keepdim=True).mean(dim=0))
 
 
-def path_len_penalty(fake_img, fake_w, path_len_avg=0.0, decay=0.01, reduce_mean=True):
-    # type: (Tensor, Tensor, Union[float, Tensor], float, bool) -> Tuple[Tensor, Tensor]
-    path_len = path_length(fake_img, fake_w)
+def path_len_penalty(fake_img, fake_w, pl_mean=0.0, pl_decay=0.01, reduce_mean=True):
+    # type: (Tensor, Tensor, Union[float, Tensor], float, bool) -> Tensor
+    pl_lengths = path_length(fake_img, fake_w)
+    # Track exponential moving average of |J*y|. It's updated inplace.
     with torch.no_grad():
-        path_len_avg = path_len_avg + decay * (path_len.mean() - path_len_avg)
-    penalty = torch.pow(path_len - path_len_avg, 2)
+        pl_mean += pl_decay * (pl_lengths.mean() - pl_mean)
+    # Calculate (|J*y|-a)^2.
+    penalty = (pl_lengths - pl_mean) ** 2
     if reduce_mean:
         penalty = penalty.mean()
-    return penalty, path_len_avg
+    return penalty
 
 
 # noinspection PyPep8Naming
@@ -99,7 +103,7 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
         super(G_LogisticNSLoss_PathLenReg, self).__init__()
         self.decay = pl_ema_decay
         self.reg_interval = pl_reg_interval
-        self.weight = pl_reg_weight
+        self.pl_weight = pl_reg_weight
 
         self.register_buffer('pl_avg', torch.zeros(1))
         self.count = 0
@@ -129,10 +133,11 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
         del fake_score
 
         if self.should_reg:
-            penalty, self.pl_avg = path_len_penalty(
-                fakes, w, self.pl_avg, self.decay, reduce_mean=True)
+            penalty = path_len_penalty(fakes, w, self.pl_avg, self.decay, reduce_mean=True)
             stats['G_pl'] = penalty.item()
 
+            # Apply weight.
+            #
             # Note: The division in pl_noise decreases the weight by num_pixels,
             # and the reduce_mean in pl_lengths decreases it by num_affine_layers.
             # The effective weight then becomes:
@@ -142,8 +147,8 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
             # = 1 / (r^2 * (log2(r) - 1))
             # = ln(2) / (r^2 * (ln(r) - ln(2))
             #
-            reg = penalty * self.weight
-            loss = loss + (reg * self.reg_interval)
+            reg = penalty * (self.pl_weight * self.reg_interval)
+            loss = loss + reg
 
         stats['G_loss'] = loss.item()
         self.update_count()
