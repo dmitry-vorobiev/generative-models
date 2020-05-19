@@ -131,6 +131,18 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
         if num_classes > 1:
             fixed_label = sample_rand_label(N_snap, num_classes, G_ema_device)
 
+    stats = dict()
+    return _loop, _sample_fake_images
+
+
+# There are no extra optimizer steps currently
+def update_optimizer_params(G_opt, D_opt, G_loss_func, D_loss_func):
+    # type: (Optimizer, Optimizer, GLossFunc, DLossFunc) -> None
+    """
+    To compensate for the fact that we now perform
+    k+1 training iterations instead of k, we adjust the optimizer
+    hyperparameters
+    """
     # Update optimizer settings if lazy_regularization is used (reg_interval > 1)
     for optimizer, loss in zip([G_opt, D_opt], [G_loss_func, D_loss_func]):
         if hasattr(loss, 'reg_interval') and loss.reg_interval > 1:
@@ -140,6 +152,3 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
                 if 'betas' in group:
                     beta1, beta2 = group['betas']
                     group['betas'] = (beta1 ** mb_ratio, beta2 ** mb_ratio)
-
-    stats = dict()
-    return _loop, _sample_fake_images
