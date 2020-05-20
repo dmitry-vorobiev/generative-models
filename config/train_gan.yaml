@@ -52,7 +52,10 @@ loss:
   G:
     class: models.stylegan2.loss.G_LogisticNSLoss_PathLenReg
     params:
+      pl_decay: 0.01
+      pl_reg_weight: 2.0
       pl_reg_interval: 4
+      pl_minibatch_shrink: 2
   D:
     class: models.stylegan2.loss.D_LogisticLoss_R1
     params:
