@@ -132,6 +132,11 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
             fixed_label = sample_rand_label(N_snap, num_classes, G_ema_device)
 
     stats = dict()
+    for loss_fn in [G_loss_func, D_loss_func]:
+        if hasattr(loss_fn, "zero_stats"):
+            zeros = loss_fn.zero_stats()
+            stats.update(zeros)
+
     return _loop, _sample_fake_images
 
 

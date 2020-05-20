@@ -25,16 +25,31 @@ def r1_penalty(real_pred: Tensor, real_img: Tensor, reduce_mean=True) -> Tensor:
 class D_LogisticLoss_R1(nn.Module):
     """ R1 and R2 regularizers from the paper
         "Which Training Methods for GANs do actually Converge?", Mescheder et al. 2018
-    """
 
-    def __init__(self, r1_interval=16, r1_gamma=10.0):
+        Args:
+            r1_gamma: Scale for regularization term, None - disabled.
+            r1_interval: Number of training steps between consecutive regularized updates,
+                None - disable lazy regularization
+    """
+    def __init__(self, r1_gamma=10.0, r1_interval=16):
         super(D_LogisticLoss_R1, self).__init__()
+
+        if r1_gamma is None or r1_gamma <= 0.0:
+            log.warning("Given r1_gamma={} R1 regularization in D_loss will be turned off"
+                        .format(r1_gamma))
+            r1_gamma = 0.0
+
+        if r1_interval is None or r1_interval < 1:
+            r1_interval = 1
+
+        self.r1_gamma = r1_gamma
         self.reg_interval = r1_interval
-        self.gamma = r1_gamma
         self.count = 0
 
     @property
     def should_reg(self) -> bool:
+        if self.r1_gamma <= 0.0:
+            return False
         return self.count % self.reg_interval == 0
 
     def update_count(self) -> None:
@@ -66,8 +81,8 @@ class D_LogisticLoss_R1(nn.Module):
         if self.should_reg:
             penalty = r1_penalty(real_score, reals, reduce_mean=True)
             stats['D_r1'] = penalty.item()
-            reg = penalty * (self.gamma * 0.5)
-            loss = loss + (reg * self.reg_interval)
+            reg = penalty * ((self.r1_gamma * 0.5) * self.reg_interval)
+            loss = loss + reg
 
         stats['D_loss'] = loss.item()
         self.update_count()
@@ -104,7 +119,7 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
 
        Args:
             pl_decay: Decay for tracking the moving average of path lengths.
-            pl_reg_weight: Scale for regularization term.
+            pl_reg_weight: Scale for regularization term, None - disabled.
             pl_reg_interval: Number of training steps between consecutive regularized updates,
                 None - disable lazy regularization
             pl_minibatch_shrink: Use lower batch_size to evaluate regularization term,
@@ -118,8 +133,8 @@ class G_LogisticNSLoss_PathLenReg(nn.Module):
             raise AttributeError("pl_decay should be greater than zero")
 
         if pl_reg_weight is None or pl_reg_weight <= 0.0:
-            log.warning("Given pl_reg_weight={} path length regularization will be turned off"
-                        .format(pl_reg_weight))
+            log.warning("Given pl_reg_weight={} path length regularization in G_loss "
+                        "will be turned off".format(pl_reg_weight))
             pl_reg_weight = 0.0
 
         if pl_reg_interval is None or pl_reg_interval < 1:
