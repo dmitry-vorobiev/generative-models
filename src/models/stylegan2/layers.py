@@ -55,6 +55,20 @@ class AddRandomNoise(nn.Module):
         return x + noise * self.gain
 
 
+class AddConstNoise(nn.Module):
+    def __init__(self, noise: Tensor):
+        super(AddConstNoise, self).__init__()
+        self.gain = nn.Parameter(torch.empty(1), requires_grad=True)
+        self.register_buffer('noise', noise)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.zeros_(self.gain)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x + self.noise * self.gain
+
+
 class Input(nn.Module):
     def __init__(self, channels, size=4):
         super(Input, self).__init__()

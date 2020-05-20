@@ -323,6 +323,7 @@ def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str
         'fmap_decay': 'fmap_decay',
         'fmap_min': 'fmap_min',
         'fmap_max': 'fmap_max',
+        'randomize_noise': 'randomize_noise',
         'nonlinearity': 'nonlinearity',
         'resample_kernel': 'blur_kernel',
     })
@@ -330,36 +331,40 @@ def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str
 
     params = dict()
     conv_vars = dict()
+    noise_vars = list()
 
     for var_name, var in tf_state.variables:
         if var_name.startswith('noise'):
-            # TODO: add support for static noise first
-            continue
+            noise_vars.append(var)
         else:
             group_vars_by_res_log2(conv_vars, var_name, var)
+    noise_vars = sorted(noise_vars, key=lambda x: x.shape[-1])
 
-    def convert_layer(values, torch_pref, tf_pref, noise=False, up=False):
-        mod_name = f'{torch_pref}.style'
-        params[f'{mod_name}.weight'] = linear_weight(values[tf_pref + 'mod_weight'])
-        params[f'{mod_name}.bias'] = bias(values[tf_pref + 'mod_bias']) + 1
+    def convert_layer(values, torch_pref, tf_pref, noise=None, up=False):
+        mod_name = f'{torch_pref}.style.'
+        params[mod_name + 'weight'] = linear_weight(values[tf_pref + 'mod_weight'])
+        params[mod_name + 'bias'] = bias(values[tf_pref + 'mod_bias']) + 1
 
-        conv_name = f'{torch_pref}.conv'
-        params[f'{conv_name}.weight'] = conv_weight(values[tf_pref + 'weight'], transposed=up)
-        params[f'{conv_name}.bias'] = bias(values[tf_pref + 'bias'])
+        conv_name = f'{torch_pref}.conv.'
+        params[conv_name + 'weight'] = conv_weight(values[tf_pref + 'weight'], transposed=up)
+        params[conv_name + 'bias'] = bias(values[tf_pref + 'bias'])
 
-        if noise:
-            noise_name = f'{torch_pref}.add_noise.gain'
-            params[noise_name] = torch.tensor(values[tf_pref + 'noise_strength'])
+        if noise is not None:
+            noise_name = f'{torch_pref}.add_noise.'
+            params[noise_name + 'noise'] = torch.from_numpy(noise)
+            params[noise_name + 'gain'] = torch.tensor(values[tf_pref + 'noise_strength'])
 
     early_layers = conv_vars[2]
     params['input.weight'] = torch.from_numpy(early_layers['Const/const'])
-    convert_layer(early_layers, 'main.0', 'Conv/', noise=True)
+    convert_layer(early_layers, 'main.0', 'Conv/', noise=noise_vars[0])
     convert_layer(early_layers, 'outs.0', 'ToRGB/')
 
     for i in range(3, max(conv_vars.keys()) + 1):
         idx = (i - 3) * 2 + 1
         for j, (tf_pref, idx) in enumerate(zip(['Conv0_up/', 'Conv1/'], [idx, idx + 1])):
-            convert_layer(conv_vars[i], f'main.{idx}', tf_pref, noise=True, up=(j == 0))
+            convert_layer(conv_vars[i], f'main.{idx}', tf_pref,
+                          noise=noise_vars[idx],
+                          up=(j == 0))
         convert_layer(conv_vars[i], f'outs.{i - 2}', 'ToRGB/')
 
     return kwargs, params

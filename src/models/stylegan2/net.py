@@ -7,8 +7,8 @@ from functools import partial
 from torch import nn, Tensor
 from typing import List, Optional, Tuple
 
-from .layers import AddBias, AddRandomNoise, ConcatMiniBatchStddev, Input, EqualizedLRConv2d, \
-    EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
+from .layers import AddBias, AddConstNoise, AddRandomNoise, ConcatMiniBatchStddev, Input, \
+    EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
 from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 
 
@@ -42,12 +42,15 @@ def style_transform(in_features, out_features):
 
 class StyledLayer(nn.Module):
     def __init__(self, in_channels, out_channels, style_dim, upsample=False,
-                 impl="ref", blur_kernel=None):
+                 impl="ref", blur_kernel=None, noise=None):
         super(StyledLayer, self).__init__()
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
                                     upsample_impl=impl, blur_kernel=blur_kernel)
-        self.add_noise = AddRandomNoise()
+        if noise is not None:
+            self.add_noise = AddConstNoise(noise)
+        else:
+            self.add_noise = AddRandomNoise()
         self.act_fn = EqualizedLRLeakyReLU(inplace=True)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
@@ -156,12 +159,14 @@ class SynthesisNet(nn.Module):
         fmap_decay: log2 feature map reduction when doubling the resolution.
         fmap_min: Minimum number of feature maps in any layer.
         fmap_max: Maximum number of feature maps in any layer.
+        randomize_noise: True = randomize noise inputs every time (non-deterministic),
+            False = read noise inputs from variables.
         impl: Implementation of upsample_conv ops
         blur_kernel: Low-pass filter to apply when resampling activations (only for `ref` impl).
     """
     def __init__(self, img_res=1024, img_channels=3, style_dim=512,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
-                 impl="ref", blur_kernel=None):
+                 randomize_noise=True, impl="ref", blur_kernel=None):
         super(SynthesisNet, self).__init__()
 
         if img_res <= 4:
@@ -202,9 +207,14 @@ class SynthesisNet(nn.Module):
 
         for res in range(1, res_log2 - 1):
             inp_ch, out_ch = nf(res), nf(res + 1)
+            noise = [None, None]
+            if not randomize_noise:
+                size = 2 ** (2 + res)
+                shape = (1, 1, size, size)
+                noise = [torch.randn(*shape) for _ in range(2)]
             main += [StyledLayer(inp_ch, out_ch, style_dim, upsample=True, impl=impl,
-                                 blur_kernel=lambda: self.weight_blur),
-                     StyledLayer(out_ch, out_ch, style_dim, impl=impl)]
+                                 blur_kernel=lambda: self.weight_blur, noise=noise[0]),
+                     StyledLayer(out_ch, out_ch, style_dim, impl=impl, noise=noise[1])]
             outs += [ToRGB(out_ch, img_channels, style_dim)]
 
         self.input = Input(nf(1), size=4)
@@ -256,6 +266,8 @@ class Generator(nn.Module):
         w_avg_beta: Decay for tracking the moving average of W during training. None = disable.
         truncation_psi: Style strength multiplier for the truncation trick. None = disable.
         truncation_cutoff: Number of layers for which to apply the truncation trick. None = all layers.
+        randomize_noise: True = randomize noise inputs every time (non-deterministic),
+            False = read noise inputs from variables.
         impl: Implementation of upsample_conv ops
         blur_kernel: Low-pass filter to apply when resampling activations (only for `ref` impl).
     """
@@ -263,12 +275,15 @@ class Generator(nn.Module):
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512, num_mapping_layers=8,
                  mapping_hidden_dim=512, mapping_lr_mult=0.01, normalize_latent=True,
                  p_style_mix=0.9, w_avg_beta=0.995, truncation_psi=0.5, truncation_cutoff=None,
-                 impl="ref", blur_kernel=None):
+                 randomize_noise=True, impl="ref", blur_kernel=None):
         super(Generator, self).__init__()
+
         if w_avg_beta >= 1.0 or w_avg_beta <= 0.0:
             w_avg_beta = None
+
         if p_style_mix <= 0.0:
             p_style_mix = None
+
         if truncation_psi >= 1.0:
             truncation_psi = None
 
@@ -281,7 +296,7 @@ class Generator(nn.Module):
 
         self.synthesis = SynthesisNet(
             img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max,
-            impl, blur_kernel)
+            randomize_noise, impl, blur_kernel)
 
         self.p_style_mix = p_style_mix
 
