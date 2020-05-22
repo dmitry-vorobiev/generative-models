@@ -8,12 +8,13 @@ from typing import List, Optional, Tuple
 
 from .layers import AddBias, AddConstNoise, AddRandomNoise, ConcatMiniBatchStddev, Input, \
     EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
-from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
+from .mod_conv import setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
+from .ops import upfirdn_2d_opt
 
 try:
-    from .ops.upfirdn_2d import upfirdn_2d_op_cuda
+    from .custom_ops.upfirdn_2d import upfirdn_2d_cuda
 except ImportError:
-    pass
+    upfirdn_2d_cuda = None
 
 
 def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):
@@ -231,7 +232,7 @@ class SynthesisNet(nn.Module):
         return upfirdn_2d_opt(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
     def _upsample_cuda(self, x: Tensor) -> Tensor:
-        return upfirdn_2d_op_cuda(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
+        return upfirdn_2d_cuda(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
     def forward(self, w: Tensor) -> Tensor:
         x = self.input(w.size(1))

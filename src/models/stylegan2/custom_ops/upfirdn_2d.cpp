@@ -34,7 +34,7 @@ torch::Tensor upfirdn_2d(
     int pady0, 
     int pady1) 
 {
-    CHECK_INPUT(input);
+    CHECK_CUDA(input);
     CHECK_INPUT(kernel);
 
     CHECK_NDIM(input, 4);
@@ -42,9 +42,12 @@ torch::Tensor upfirdn_2d(
 
     CHECK_MIN_SIZE(kernel, 1);
 
-    return upfirdn_2d_op(input, kernel, upx, upy, downx, downy, padx0, padx1, pady0, pady1);
+    input = input.transpose(1, 3).contiguous();
+    auto out = upfirdn_2d_op(input, kernel, upx, upy, downx, downy, padx0, padx1, pady0, pady1);
+    out = out.transpose_(1, 3).contiguous();
+    return out;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("forward", &upfirdn_2d, "upfirdn_2d (CUDA)");
+  m.def("execute", &upfirdn_2d, "upfirdn_2d (CUDA)");
 }

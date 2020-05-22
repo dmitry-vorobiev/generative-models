@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import Any, Callable, Optional
 
-from .custom_ops import minibatch_stddev
+from .ops import minibatch_stddev
 
 
 def equalized_lr_init(weight, bias, scale_weights=True, lr_mult=1.0, transposed=False):

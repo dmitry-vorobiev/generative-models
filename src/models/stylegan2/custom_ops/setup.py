@@ -2,11 +2,11 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 setup(
-    name='upfirdn_2d',
+    name='stylegan2_custom_ops',
     ext_modules=[
-        CUDAExtension('upfirdn_2d_cuda', [
-            'upfirdn_2d_torch.cpp',
-            'upfirdn_2d.cu',
+        CUDAExtension('upfirdn_2d_op', [
+            'upfirdn_2d.cpp',
+            'upfirdn_2d_kernel.cu',
         ])
     ],
     cmdclass={

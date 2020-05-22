@@ -4,77 +4,15 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.utils import _pair
-from typing import List, Sequence, Tuple
+from typing import Sequence
 
 from .layers import equalized_lr_init, EqualizedLRConv2d
+from .ops import upfirdn_2d_opt
 
 try:
-    from .ops.upfirdn_2d import upfirdn_2d_op_cuda
+    from .custom_ops.upfirdn_2d import upfirdn_2d_cuda
 except ImportError:
-    pass
-
-
-def upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
-    # type: (Tensor, Tensor, int, int, int, int, int, int, int, int) -> Tensor
-    N, C, H, W = x.shape
-    Hk, Wk = w.shape[-2:]
-    assert H > 0 and W > 0
-    # left only runtime asserts
-
-    # Upsample (insert zeros).
-    if upx > 1 or upy > 1:
-        x = x.view(-1, C, H, 1, W, 1)
-        x = F.pad(x, [0, upx - 1, 0, 0, 0, upy - 1])
-        x = x.view(-1, C, H * upy, W * upx)
-
-    # Pad (crop if negative).
-    pads = [padx0, padx1, pady0, pady1]
-    if any(pads):
-        x = F.pad(x, pads)
-
-    # Convolve with filter.
-    _, _, H1, W1 = x.shape
-    x = x.view(-1, 1, H1, W1)
-    if w.ndim == 2:
-        # no need to flip since we use symmetric kernels
-        w = torch.flip(w, dims=(0, 1))[None, None, :]
-    x = F.conv2d(x, w, stride=1, padding=0)
-    x = x.view(N, C, H1 - Hk + 1, W1 - Wk + 1)
-
-    # Downsample (throw away pixels).
-    if downx > 1 or downy > 1:
-        x = x[:, :, ::downy, ::downx]
-    return x
-
-
-def upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
-    # type: (Tensor, Tensor, int, int, int, int) -> Tensor
-    N, C, H, W = x.shape
-    assert H > 0 and W > 0
-    assert w.ndim == 4
-    # left only runtime asserts
-
-    # Upsample (insert zeros).
-    if up > 1:
-        x = x[:, :, :, None, :, None]
-        x = F.pad(x, [0, up - 1, 0, 0, 0, up - 1])
-        x = x.view(N, C, H * up, W * up)
-
-    # Pad (crop if negative).
-    # for padding like (1,1), (2,2), etc. use conv2d argument
-    padding = pad0
-    if pad0 != pad1 or pad0 < 0 or pad1 < 0:
-        x = F.pad(x, [pad0, pad1] * 2)
-        padding = 0
-
-    # Convolve with filter.
-    w = w.expand(C, -1, -1, -1)
-    x = F.conv2d(x, w, stride=1, padding=padding, groups=C)
-
-    # Downsample (throw away pixels).
-    if down > 1:
-        x = x[:, :, ::down, ::down]
-    return x
+    upfirdn_2d_cuda = None
 
 
 def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
@@ -90,12 +28,11 @@ def setup_blur_weights(k: Sequence[int], up=0, down=0, impl="ref") -> Tensor:
     if k is None:
         k = [1] * (up or down)
     k = _setup_kernel(k) * max(1, up ** 2)
-    # from _upfirdn_2d_ref:
-    # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
-    w = torch.flip(k, dims=(0, 1))
     if impl == "ref":
-        w = w[None, None, :]
-    return w
+        # from _upfirdn_2d_ref:
+        # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
+        k = torch.flip(k, dims=(0, 1))[None, None, :]
+    return k
 
 
 def _same(k: Sequence) -> bool:
@@ -189,7 +126,7 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
     def _upsample_conv2d_cuda(self, x, w):
         # type: (Tensor, Tensor) -> Tensor
         x = self._conv_transpose2d(x, w)
-        return upfirdn_2d_op_cuda(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
+        return upfirdn_2d_cuda(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
 
     def _upsample_conv2d_ref(self, x, w):
         # type: (Tensor, Tensor) -> Tensor

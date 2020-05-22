@@ -219,12 +219,13 @@ torch::Tensor upfirdn_2d_op(
     int pady1)
 {
     cudaStream_t stream;
-    cudaStreamCreateWithFlags(&stream, cudaStreamDefault);
+    // cudaStreamCreateWithFlags(&stream, cudaStreamDefault);
+    cudaStreamCreate(&stream);
 
     int majorDim  = input.size(0);
-    int minorDim  = input.size(1);
-    int inH       = input.size(2);
-    int inW       = input.size(3);
+    int inH       = input.size(1);
+    int inW       = input.size(2);
+    int minorDim  = input.size(3);
     int kernelH   = kernel.size(0);
     int kernelW   = kernel.size(1);
 
@@ -232,7 +233,6 @@ torch::Tensor upfirdn_2d_op(
     int outH = (inH * upy + pady0 + pady1 - kernelH + downy) / downy;
     TORCH_CHECK(outW >= 1 && outH >= 1, "output must be at least 1x1");
 
-    input = input.transpose(1, 3).contiguous();
     auto y = at::empty({majorDim, outH, outW, minorDim}, input.options());
 
     AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "upfirdn_2d_cuda", [&] {
@@ -303,6 +303,5 @@ torch::Tensor upfirdn_2d_op(
     });
 
     cudaStreamDestroy(stream);
-    y = y.transpose_(1, 3).contiguous();
     return y;
 }
