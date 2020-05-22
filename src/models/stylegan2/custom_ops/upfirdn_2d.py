@@ -13,18 +13,20 @@ class UpFirDn2D(torch.autograd.Function):
         out = upfirdn_2d_op.execute(inp, kernel, upx, upy, downx, downy,
                                     padx0, padx1, pady0, pady1)
         # saving vars for backward
-        H0, W0 = inp.shape[-2:]
-        H1, W1 = out.shape[-2:]
-        Hk, Wk = kernel.shape
+        inH, inW = inp.shape[-2:]
+        # H1, W1 = out.shape[-2:]
+        kernelH, kernelW = kernel.shape
+        outW = (inW * upx + padx0 + padx1 - kernelW) // downx + 1
+        outH = (inH * upy + pady0 + pady1 - kernelH) // downy + 1
 
         ctx.upx = downx
         ctx.upy = downy
         ctx.downx = upx
         ctx.downy = upy
-        ctx.padx0 = Wk - padx0 - 1
-        ctx.pady0 = Hk - pady0 - 1
-        ctx.padx1 = W0 * upx - W1 * downx + padx0 - upx + 1
-        ctx.pady1 = H0 * upy - H1 * downy + pady0 - upy + 1
+        ctx.padx0 = kernelW - padx0 - 1
+        ctx.pady0 = kernelH - pady0 - 1
+        ctx.padx1 = inW * upx - outW * downx + padx0 - upx + 1
+        ctx.pady1 = inH * upy - outH * downy + pady0 - upy + 1
 
         grad_kernel = torch.flip(kernel, dims=(0, 1))
         ctx.save_for_backward(grad_kernel)

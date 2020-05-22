@@ -174,17 +174,26 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
 
 # noinspection PyPep8Naming
 class Conv2d_Downsample(nn.Module, BlurWeightsMixin):
-    def __init__(self, in_channels, out_channels, kernel_size, bias=True, blur_kernel=None):
-        super(Conv2d_Downsample, self).__init__()
-        self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=2, bias=bias)
+    upfirdn_2d_fn = dict(ref=upfirdn_2d_opt, cuda=upfirdn_2d_cuda)
 
-        self._init_blur_weights(blur_kernel, down=2, impl="ref")
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True, impl="ref",
+                 blur_kernel=None):
+        super(Conv2d_Downsample, self).__init__()
+
+        if impl not in ["ref", "cuda"]:
+            raise AttributeError("impl should be one of [ref, cuda]")
+
+        down = 2
+        self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=down,
+                                      bias=bias)
+        self._init_blur_weights(blur_kernel, down=down, impl=impl)
         W_blur = self.weight_blur.size(-1)
         W_conv = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
-        p = (W_blur - 2) + (W_conv - 1)
+        p = (W_blur - down) + (W_conv - 1)
         self.pad0 = (p + 1) // 2
         self.pad1 = p // 2
+        self.upfirdn_2d = self.upfirdn_2d_fn[impl]
 
     def forward(self, x: Tensor) -> Tensor:
-        x = upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
+        x = self.upfirdn_2d(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
         return self.conv(x)

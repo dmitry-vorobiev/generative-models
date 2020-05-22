@@ -88,11 +88,11 @@ class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, impl="ref", blur_kernel=None):
         super(ResidualBlock, self).__init__()
 
-        if impl == "ref":
-            conv_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=3,
-                                             bias=True, blur_kernel=blur_kernel)]
-            skip_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=1,
-                                             bias=False, blur_kernel=blur_kernel)]
+        if impl in ["ref", "cuda"]:
+            conv_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=3, bias=True,
+                                             impl=impl, blur_kernel=blur_kernel)]
+            skip_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=1, bias=False,
+                                             impl=impl, blur_kernel=blur_kernel)]
         else:
             conv_layers = conv_down_torch(in_channels, out_channels, kernel=3, bias=True)
             skip_layers = conv_down_torch(in_channels, out_channels, kernel=1, bias=False)
@@ -184,11 +184,12 @@ class SynthesisNet(nn.Module):
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
 
-            weight_blur = setup_blur_weights(blur_kernel, up=2, impl=impl)
+            up = 2
+            weight_blur = setup_blur_weights(blur_kernel, up=up, impl=impl)
             self.register_buffer("weight_blur", weight_blur)
 
-            p = weight_blur.size(-1) - 2
-            self.pad0 = (p + 1) // 2 + 1
+            p = weight_blur.size(-1) - up
+            self.pad0 = (p + 1) // 2 + up - 1
             self.pad1 = p // 2
             self._upsample = getattr(self, "_upsample_" + impl)
         else:
@@ -395,15 +396,16 @@ class Discriminator(nn.Module):
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
 
-        if impl not in ["torch", "ref"]:
-            raise AttributeError("impl should be one of [torch, ref]")
+        if impl not in ["torch", "ref", "cuda"]:
+            raise AttributeError("impl should be one of [torch, ref, cuda]")
 
         self.num_classes = num_classes
 
-        if impl == "ref":
+        if impl in ["ref", "cuda"]:
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
-            weight_blur = setup_blur_weights(blur_kernel, down=2)
+
+            weight_blur = setup_blur_weights(blur_kernel, down=2, impl=impl)
             self.register_buffer("weight_blur", weight_blur)
         else:
             self.weight_blur = None
