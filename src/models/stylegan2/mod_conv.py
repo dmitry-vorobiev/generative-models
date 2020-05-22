@@ -8,6 +8,11 @@ from typing import List, Sequence, Tuple
 
 from .layers import equalized_lr_init, EqualizedLRConv2d
 
+try:
+    from .ops.upfirdn_2d import upfirdn_2d_op_cuda
+except ImportError:
+    pass
+
 
 def upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
     # type: (Tensor, Tensor, int, int, int, int, int, int, int, int) -> Tensor
@@ -80,14 +85,17 @@ def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
     return k
 
 
-def setup_blur_weights(k: Sequence[int], up=0, down=0) -> Tensor:
+def setup_blur_weights(k: Sequence[int], up=0, down=0, impl="ref") -> Tensor:
     assert not (up and down)
     if k is None:
         k = [1] * (up or down)
     k = _setup_kernel(k) * max(1, up ** 2)
     # from _upfirdn_2d_ref:
     # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
-    return torch.flip(k, dims=(0, 1))[None, None, :]
+    w = torch.flip(k, dims=(0, 1))
+    if impl == "ref":
+        w = w[None, None, :]
+    return w
 
 
 def _same(k: Sequence) -> bool:
@@ -98,12 +106,12 @@ def _same(k: Sequence) -> bool:
 
 
 class BlurWeightsMixin(object):
-    def _init_blur_weights(self, blur_kernel, up=0, down=0):
+    def _init_blur_weights(self, blur_kernel, up=0, down=0, impl="ref"):
         if blur_kernel is None:
             blur_kernel = [1, 3, 3, 1]
 
         if isinstance(blur_kernel, Sequence):
-            blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down)
+            blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down, impl=impl)
 
         if isinstance(blur_kernel, Tensor):
             C1, C0, Hb, Wb = blur_kernel.shape
@@ -125,10 +133,9 @@ class BlurWeightsMixin(object):
 
 class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, demodulate=True,
-                 upsample=False, upsample_impl="ref", blur_kernel=None,
-                 scale_weights=True, lr_mult=1.0):
-        if upsample_impl not in ["torch", "ref"]:
-            raise AttributeError("impl should be one of [torch, ref]")
+                 upsample=False, impl="ref", blur_kernel=None, scale_weights=True, lr_mult=1.0):
+        if impl not in ["torch", "ref", "cuda"]:
+            raise AttributeError("impl should be one of [torch, ref, cuda]")
 
         if isinstance(kernel_size, Sequence):
             if not _same(kernel_size):
@@ -144,22 +151,20 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         self.lr_mult = lr_mult
         self.weight_mult = 1.0
 
-        transposed = upsample and upsample_impl == "ref"
+        transposed = upsample and impl in ["ref", "cuda"]
         super(ModulatedConv2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             transposed, _pair(0), groups=1, bias=bias, padding_mode='zeros')
 
         if upsample:
-            if upsample_impl == "ref":
-                self._init_blur_weights(blur_kernel, up=2)
+            if impl in ["ref", "cuda"]:
+                self._init_blur_weights(blur_kernel, up=2, impl=impl)
                 W_blur = self.weight_blur.size(-1)
                 W_conv = kernel_size[0]
                 p = (W_blur - 2) - (W_conv - 1)
                 self.pad0 = (p + 1) // 2 + 1
                 self.pad1 = p // 2 + 1
-                self._exec = self._upsample_conv2d_ref
-            else:
-                self._exec = self._upsample_conv2d_torch
+            self._exec = getattr(self, "_upsample_conv2d_" + impl)
         else:
             self._exec = self._conv2d
 
@@ -181,13 +186,14 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         d = torch.rsqrt_(w.pow(2).sum(dim=(C_in, 3, 4), keepdim=True).add_(eps))
         return w * d
 
+    def _upsample_conv2d_cuda(self, x, w):
+        # type: (Tensor, Tensor) -> Tensor
+        x = self._conv_transpose2d(x, w)
+        return upfirdn_2d_op_cuda(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
+
     def _upsample_conv2d_ref(self, x, w):
         # type: (Tensor, Tensor) -> Tensor
-        N, C0, C1, Hc, Wc = w.shape
-        w = w.view(N * C0, C1, Hc, Wc)
-        x = F.conv_transpose2d(x, w, stride=2, padding=0, groups=N)
-        _, _, H1, W1, = x.shape
-        x = x.view(N, C1, H1, W1)
+        x = self._conv_transpose2d(x, w)
         return upfirdn_2d_opt(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
 
     def _upsample_conv2d_torch(self, x, w):
@@ -201,6 +207,15 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         w = w.view(N * C1, C0, Hc, Wc)
         x = F.conv2d(x, w, stride=1, padding=self.padding, groups=N)
         _, _, H1, W1 = x.shape
+        return x.view(N, C1, H1, W1)
+
+    @staticmethod
+    def _conv_transpose2d(x, w):
+        # type: (Tensor, Tensor) -> Tensor
+        N, C0, C1, Hc, Wc = w.shape
+        w = w.view(N * C0, C1, Hc, Wc)
+        x = F.conv_transpose2d(x, w, stride=2, padding=0, groups=N)
+        H1, W1, = x.shape[-2:]
         return x.view(N, C1, H1, W1)
 
     def conv2d_forward(self, x, style, weight):
@@ -226,7 +241,7 @@ class Conv2d_Downsample(nn.Module, BlurWeightsMixin):
         super(Conv2d_Downsample, self).__init__()
         self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=2, bias=bias)
 
-        self._init_blur_weights(blur_kernel, down=2)
+        self._init_blur_weights(blur_kernel, down=2, impl="ref")
         W_blur = self.weight_blur.size(-1)
         W_conv = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
         p = (W_blur - 2) + (W_conv - 1)

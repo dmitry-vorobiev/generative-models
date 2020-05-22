@@ -37,3 +37,10 @@ class UpFirDn2D_CUDA(torch.autograd.Function):
                                                 ctx.downx, ctx.downy,
                                                 ctx.padx0, ctx.padx1, ctx.pady0, ctx.pady1)
         return d_inp, None, None, None, None, None, None, None, None, None
+
+
+def upfirdn_2d_op_cuda(x, w, up=1, down=1, pad0=0, pad1=0):
+    # type: (Tensor, Tensor, int, int, int, int) -> Tensor
+    N, C, H, W = x.shape
+    assert H > 0 and W > 0
+    return UpFirDn2D_CUDA.apply(x, w, up, up, down, down, pad0, pad1, pad0, pad1)

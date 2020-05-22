@@ -3,7 +3,6 @@ import random
 import torch
 import torch.nn.functional as F
 
-from functools import partial
 from torch import nn, Tensor
 from typing import List, Optional, Tuple
 
@@ -11,9 +10,10 @@ from .layers import AddBias, AddConstNoise, AddRandomNoise, ConcatMiniBatchStdde
     EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
 from .mod_conv import upfirdn_2d_opt, setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 
-
-def _upsample_torch(x: Tensor, factor: int) -> Tensor:
-    return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
+try:
+    from .ops.upfirdn_2d import upfirdn_2d_op_cuda
+except ImportError:
+    pass
 
 
 def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):
@@ -46,7 +46,7 @@ class StyledLayer(nn.Module):
         super(StyledLayer, self).__init__()
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
-                                    upsample_impl=impl, blur_kernel=blur_kernel)
+                                    impl=impl, blur_kernel=blur_kernel)
         if noise is not None:
             self.add_noise = AddConstNoise(noise)
         else:
@@ -176,26 +176,24 @@ class SynthesisNet(nn.Module):
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
 
-        if impl not in ["torch", "ref"]:
-            raise AttributeError("impl should be one of [torch, ref]")
+        if impl not in ["torch", "ref", "cuda"]:
+            raise AttributeError("impl should be one of [torch, ref, cuda]")
 
-        if impl == "ref":
+        if impl in ["ref", "cuda"]:
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
-            weight_blur = setup_blur_weights(blur_kernel, up=2)
+
+            weight_blur = setup_blur_weights(blur_kernel, up=2, impl=impl)
             self.register_buffer("weight_blur", weight_blur)
 
             p = weight_blur.size(-1) - 2
             self.pad0 = (p + 1) // 2 + 1
             self.pad1 = p // 2
-
-            # can't use partial here, because the weight tensor needs to be transferred
-            # to the correct device first (lambda bellow is for the same reason)
-            self._upsample = self._upsample_ref
+            self._upsample = getattr(self, "_upsample_" + impl)
         else:
             self.weight_blur = None
-            self._upsample = partial(_upsample_torch, factor=2)
 
+        self._upsample = getattr(self, "_upsample_" + impl)
         self.res_log2 = res_log2
 
         def nf(stage: int) -> int:
@@ -225,8 +223,15 @@ class SynthesisNet(nn.Module):
     def num_layers(self) -> int:
         return len(self.main) + 1
 
+    @staticmethod
+    def _upsample_torch(x: Tensor) -> Tensor:
+        return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+
     def _upsample_ref(self, x: Tensor) -> Tensor:
         return upfirdn_2d_opt(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
+
+    def _upsample_cuda(self, x: Tensor) -> Tensor:
+        return upfirdn_2d_op_cuda(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
     def forward(self, w: Tensor) -> Tensor:
         x = self.input(w.size(1))
