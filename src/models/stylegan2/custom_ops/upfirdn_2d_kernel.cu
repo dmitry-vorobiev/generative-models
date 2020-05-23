@@ -207,8 +207,8 @@ static __global__ void UpFirDn2DKernel_small(const UpFirDn2DKernelParams<T> p)
 }
 
 torch::Tensor upfirdn_2d_op(
-    torch::Tensor input, 
-    torch::Tensor kernel, 
+    const torch::Tensor& input, 
+    const torch::Tensor& kernel, 
     int upx, 
     int upy, 
     int downx, 
@@ -218,14 +218,11 @@ torch::Tensor upfirdn_2d_op(
     int pady0, 
     int pady1)
 {
-    cudaStream_t stream;
-    // cudaStreamCreateWithFlags(&stream, cudaStreamDefault);
-    cudaStreamCreate(&stream);
-
     int majorDim  = input.size(0);
     int inH       = input.size(1);
     int inW       = input.size(2);
     int minorDim  = input.size(3);
+    
     int kernelH   = kernel.size(0);
     int kernelW   = kernel.size(1);
 
@@ -233,27 +230,27 @@ torch::Tensor upfirdn_2d_op(
     int outH = (inH * upy + pady0 + pady1 - kernelH + downy) / downy;
     TORCH_CHECK(outW >= 1 && outH >= 1, "output must be at least 1x1");
 
-    auto y = at::empty({majorDim, outH, outW, minorDim}, input.options());
+    auto output = at::empty({majorDim, outH, outW, minorDim}, input.options());
 
-    AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "upfirdn_2d_cuda", [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "upfirdn_2d_closure", [&] {
         UpFirDn2DKernelParams<scalar_t> p;
 
         p.x = input.data_ptr<scalar_t>();
         p.k = kernel.data_ptr<scalar_t>();
-        p.y = y.data_ptr<scalar_t>();
+        p.y = output.data_ptr<scalar_t>();
 
         p.majorDim = majorDim;
         p.minorDim = minorDim;
-        p.inH = inH;
-        p.inW = inW;
-        p.outH = outH;
-        p.outW = outW;
+        p.inH   = inH;
+        p.inW   = inW;
+        p.outH  = outH;
+        p.outW  = outW;
 
         p.kernelH = kernelH;
         p.kernelW = kernelW;
 
-        p.upx = upx;
-        p.upy = upy;
+        p.upx   = upx;
+        p.upy   = upy;
         p.downx = downx;
         p.downy = downy;
         p.padx0 = padx0;
@@ -299,9 +296,11 @@ torch::Tensor upfirdn_2d_op(
 
         // Launch CUDA kernel.
         void* args[] = {&p};
+        cudaStream_t stream;
+        cudaStreamCreate(&stream);
         OP_CHECK_CUDA_ERROR(cudaLaunchKernel(cudaKernel, gridSize, blockSize, args, 0, stream));
+        cudaStreamDestroy(stream);
     });
 
-    cudaStreamDestroy(stream);
-    return y;
+    return output;
 }

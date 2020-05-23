@@ -3,8 +3,8 @@
 // CUDA declarations
 
 torch::Tensor upfirdn_2d_op(
-    torch::Tensor input, 
-    torch::Tensor kernel, 
+    const torch::Tensor& input, 
+    const torch::Tensor& kernel, 
     int upx, 
     int upy, 
     int downx, 
@@ -23,8 +23,8 @@ torch::Tensor upfirdn_2d_op(
 #define CHECK_MIN_SIZE(x, n) TORCH_CHECK(x.size(0) >= n && x.size(1) >= n, #x " must be at least " #n "x" #n)
 
 torch::Tensor upfirdn_2d(
-    torch::Tensor input, 
-    torch::Tensor kernel, 
+    const torch::Tensor& input, 
+    const torch::Tensor& kernel, 
     int upx, 
     int upy, 
     int downx, 
@@ -42,10 +42,12 @@ torch::Tensor upfirdn_2d(
 
     CHECK_MIN_SIZE(kernel, 1);
 
-    input = input.transpose(1, 3).contiguous();
-    auto out = upfirdn_2d_op(input, kernel, upx, upy, downx, downy, padx0, padx1, pady0, pady1);
-    out = out.transpose_(1, 3).contiguous();
-    return out;
+    // (N, C, H, W) -> (N, H, W, C)
+    auto inp = input.detach().permute({0, 2, 3, 1}).contiguous();
+    auto out = upfirdn_2d_op(inp, kernel, upx, upy, downx, downy, padx0, padx1, pady0, pady1);
+    // (N, H, W, C) -> (N, C, H, W)
+    auto output = out.permute({0, 3, 1, 2}).contiguous();
+    return output;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
