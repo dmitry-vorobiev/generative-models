@@ -9,12 +9,7 @@ from typing import List, Optional, Tuple
 from .layers import AddBias, AddConstNoise, AddRandomNoise, ConcatMiniBatchStddev, Input, \
     EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
 from .mod_conv import setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
-from .ops import upfirdn_2d_opt
-
-try:
-    from .custom_ops.upfirdn_2d import upfirdn_2d_cuda
-except ImportError:
-    upfirdn_2d_cuda = None
+from .ops import upfirdn_2d_cuda, upfirdn_2d_opt
 
 
 def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):

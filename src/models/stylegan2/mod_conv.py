@@ -7,12 +7,7 @@ from torch.nn.modules.utils import _pair
 from typing import Sequence
 
 from .layers import equalized_lr_init, EqualizedLRConv2d
-from .ops import upfirdn_2d_opt
-
-try:
-    from .custom_ops.upfirdn_2d import upfirdn_2d_cuda
-except ImportError:
-    upfirdn_2d_cuda = None
+from .ops import upfirdn_2d_cuda, upfirdn_2d_opt
 
 
 def _setup_kernel(k: Sequence[int], device=None) -> Tensor:

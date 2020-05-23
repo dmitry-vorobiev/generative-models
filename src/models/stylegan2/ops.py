@@ -3,6 +3,8 @@ import torch.nn.functional as F
 
 from torch import Tensor
 
+from .custom_ops.upfirdn_2d import UpFirDn2D
+
 
 def upfirdn_2d_ref(x, w, upx, upy, downx, downy, padx0, padx1, pady0, pady1):
     # type: (Tensor, Tensor, int, int, int, int, int, int, int, int) -> Tensor
@@ -65,6 +67,13 @@ def upfirdn_2d_opt(x, w, up=1, down=1, pad0=0, pad1=0):
     if down > 1:
         x = x[:, :, ::down, ::down]
     return x
+
+
+def upfirdn_2d_cuda(x, w, up=1, down=1, pad0=0, pad1=0):
+    # type: (Tensor, Tensor, int, int, int, int) -> Tensor
+    N, C, H, W = x.shape
+    assert H > 0 and W > 0
+    return UpFirDn2D.apply(x, w, up, up, down, down, pad0, pad1, pad0, pad1)
 
 
 def minibatch_stddev(x: Tensor, group_size: int, num_new_features: int, eps=1e-8):

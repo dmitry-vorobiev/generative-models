@@ -1,9 +1,13 @@
 import torch
 
-import upfirdn_2d_op
-
 from torch import Tensor
 from typing import Any
+
+try:
+    import upfirdn_2d_op
+except ImportError:
+    from torch.utils.cpp_extension import load
+    upfirdn_2d_op = load('upfirdn_2d_op', ['upfirdn_2d.cpp', 'upfirdn_2d_kernel.cu'])
 
 
 class UpFirDn2D(torch.autograd.Function):
@@ -39,10 +43,3 @@ class UpFirDn2D(torch.autograd.Function):
                                               ctx.downx, ctx.downy,
                                               ctx.padx0, ctx.padx1, ctx.pady0, ctx.pady1)
         return d_inp, None, None, None, None, None, None, None, None, None
-
-
-def upfirdn_2d_cuda(x, w, up=1, down=1, pad0=0, pad1=0):
-    # type: (Tensor, Tensor, int, int, int, int) -> Tensor
-    N, C, H, W = x.shape
-    assert H > 0 and W > 0
-    return UpFirDn2D.apply(x, w, up, up, down, down, pad0, pad1, pad0, pad1)
