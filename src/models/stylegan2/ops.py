@@ -73,7 +73,7 @@ def upfirdn_2d_cuda(x, w, up=1, down=1, pad0=0, pad1=0):
     # type: (Tensor, Tensor, int, int, int, int) -> Tensor
     N, C, H, W = x.shape
     assert H > 0 and W > 0
-    return UpFirDn2D.apply(x, w, up, up, down, down, pad0, pad1, pad0, pad1)
+    return UpFirDn2D.apply(x, w, (up, up), (down, down), (pad0, pad1, pad0, pad1))
 
 
 def minibatch_stddev(x: Tensor, group_size: int, num_new_features: int, eps=1e-8):

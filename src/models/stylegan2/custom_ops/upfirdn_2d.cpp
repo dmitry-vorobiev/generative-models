@@ -42,12 +42,17 @@ torch::Tensor upfirdn_2d(
 
     CHECK_MIN_SIZE(kernel, 1);
 
-    // (N, C, H, W) -> (N, H, W, C)
-    auto inp = input.detach().permute({0, 2, 3, 1}).contiguous();
+    int64_t inC = input.size(1);
+    int64_t inH = input.size(2);
+    int64_t inW = input.size(3);
+    // (N, C, H, W) -> (N*C, H, W, 1)
+    auto inp = input.view({-1, inH, inW, 1}).contiguous();
     auto out = upfirdn_2d_op(inp, kernel, upx, upy, downx, downy, padx0, padx1, pady0, pady1);
-    // (N, H, W, C) -> (N, C, H, W)
-    auto output = out.permute({0, 3, 1, 2}).contiguous();
-    return output;
+
+    int64_t outH = out.size(1);
+    int64_t outW = out.size(2);
+    // (N*C, H, W, 1) -> (N, C, H, W)
+    return out.view({-1, inC, outH, outW});
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

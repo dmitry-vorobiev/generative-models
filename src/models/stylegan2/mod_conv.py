@@ -13,7 +13,7 @@ from .ops import upfirdn_2d_cuda, upfirdn_2d_opt
 def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
     k = torch.tensor(k, dtype=torch.float32, device=device)
     if k.ndim == 1:
-        k = k[:, None] @ k[None, :]
+        k = k[:, None] * k[None, :]
     k /= k.sum()
     return k
 
@@ -46,8 +46,11 @@ class BlurWeightsMixin(object):
             blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down, impl=impl)
 
         if isinstance(blur_kernel, Tensor):
-            C1, C0, Hb, Wb = blur_kernel.shape
-            assert C1 == 1 and C0 == 1 and Hb == Wb
+            Hb, Wb = blur_kernel.shape[-2:]
+            assert Hb == Wb, "only square kernels are supported"
+            if impl == "ref":
+                C1, C0 = blur_kernel.shape[:2]
+                assert C1 == 1 and C0 == 1
             # noinspection PyUnresolvedReferences
             self.register_buffer("_weight_blur", blur_kernel)
         elif hasattr(blur_kernel, "__call__"):
