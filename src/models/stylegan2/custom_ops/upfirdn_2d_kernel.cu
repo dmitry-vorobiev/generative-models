@@ -12,6 +12,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include <c10/cuda/CUDAStream.h>
+
 #include <stdio.h>
 
 //------------------------------------------------------------------------
@@ -218,6 +220,9 @@ torch::Tensor upfirdn_2d_op(
     int pady0, 
     int pady1)
 {
+    c10::DeviceIndex device = input.device().index();
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device).stream();
+
     int majorDim  = input.size(0);
     int inH       = input.size(1);
     int inW       = input.size(2);
@@ -296,10 +301,7 @@ torch::Tensor upfirdn_2d_op(
 
         // Launch CUDA kernel.
         void* args[] = {&p};
-        cudaStream_t stream;
-        cudaStreamCreate(&stream);
         OP_CHECK_CUDA_ERROR(cudaLaunchKernel(cudaKernel, gridSize, blockSize, args, 0, stream));
-        cudaStreamDestroy(stream);
     });
 
     return output;
