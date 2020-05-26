@@ -220,8 +220,10 @@ torch::Tensor upfirdn_2d_op(
     int pady0, 
     int pady1)
 {
-    c10::DeviceIndex device = input.device().index();
-    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(device).stream();
+    cudaSetDevice(input.get_device());
+
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
 
     int majorDim  = input.size(0);
     int inH       = input.size(1);
@@ -304,5 +306,6 @@ torch::Tensor upfirdn_2d_op(
         OP_CHECK_CUDA_ERROR(cudaLaunchKernel(cudaKernel, gridSize, blockSize, args, 0, stream));
     });
 
+    cudaStreamDestroy(stream);
     return output;
 }
