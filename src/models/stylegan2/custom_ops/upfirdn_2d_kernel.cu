@@ -12,7 +12,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#include <c10/cuda/CUDAStream.h>
+// #include <c10/cuda/CUDAGuard.h>
 
 #include <stdio.h>
 
@@ -220,10 +220,11 @@ torch::Tensor upfirdn_2d_op(
     int pady0, 
     int pady1)
 {
-    cudaSetDevice(input.get_device());
+    // c10::cuda::CUDAGuard device_lock(input.get_device());
+    OP_CHECK_CUDA_ERROR(cudaSetDevice(input.get_device()));
 
     cudaStream_t stream;
-    cudaStreamCreate(&stream);
+    OP_CHECK_CUDA_ERROR(cudaStreamCreate(&stream));
 
     int majorDim  = input.size(0);
     int inH       = input.size(1);
@@ -306,6 +307,6 @@ torch::Tensor upfirdn_2d_op(
         OP_CHECK_CUDA_ERROR(cudaLaunchKernel(cudaKernel, gridSize, blockSize, args, 0, stream));
     });
 
-    cudaStreamDestroy(stream);
+    OP_CHECK_CUDA_ERROR(cudaStreamDestroy(stream));
     return output;
 }
