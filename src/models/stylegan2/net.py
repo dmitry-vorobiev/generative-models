@@ -231,6 +231,7 @@ class SynthesisNet(nn.Module):
         return upfirdn_2d_cuda(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
 
     def forward(self, w: Tensor) -> Tensor:
+        # w: (num_layers, batch_size, style_dim)
         x = self.input(w.size(1))
         y = None
         for i, layer in enumerate(self.main):
@@ -314,7 +315,8 @@ class Generator(nn.Module):
 
     def update_w_avg(self, w: Tensor):
         with torch.no_grad():
-            self.w_avg = torch.lerp(w.mean(0), self.w_avg, self.w_avg_beta)
+            # self.w_avg = torch.lerp(w.mean(0), self.w_avg, self.w_avg_beta)
+            self.w_avg.lerp_(w.mean(0), (1 - self.w_avg_beta))
 
     def mix_styles(self, z1, w1, label=None):
         # type: (Tensor, Tensor, Optional[Tensor]) -> Tensor

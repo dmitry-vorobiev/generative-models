@@ -252,7 +252,8 @@ def run(conf: DictConfig, local_rank=0, distributed=False):
     train_options = {
         'train':    dict(conf.train),
         'snapshot': dict(conf.snapshots),
-        'smoothing': dict(conf.G_smoothing)
+        'smoothing': dict(conf.G_smoothing),
+        'distributed': distributed
     }
     bs_dl = int(conf.data.loader.batch_size) * num_replicas
     bs_eff = conf.train.batch_size

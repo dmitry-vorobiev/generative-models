@@ -108,8 +108,14 @@ def create_train_closures(G, D, G_loss_func, D_loss_func, G_opt, D_opt, G_ema=No
                  "and update interval %d steps" % (beta, ema_rounds))
         ema_weight = 1 - beta
 
-    G_ = G.module if hasattr(G, 'module') else G
-    D_ = D.module if hasattr(D, 'module') else D
+    G_ = G
+    D_ = D
+    if options['distributed']:
+        G_ = G.module
+        D_ = D.module
+        G.broadcast_buffers = False
+        D.broadcast_buffers = False
+
     latent_dim = G_.latent_dim
     num_classes = G_.num_classes
     _sample_z = partial(sample_latent, dim=latent_dim, device=device)

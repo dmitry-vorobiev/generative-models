@@ -30,7 +30,7 @@ def equalized_lr_init(weight, bias, scale_weights=True, lr_mult=1.0, transposed=
 class EqualizedLRLeakyReLU(nn.LeakyReLU):
     def __init__(self, negative_slope=0.2, inplace=False, gain=math.sqrt(2)):
         super(EqualizedLRLeakyReLU, self).__init__(negative_slope, inplace)
-        self.register_buffer('gain', torch.tensor(gain))
+        self.gain = gain
 
     def forward(self, x: Tensor) -> Tensor:
         if self.inplace:
