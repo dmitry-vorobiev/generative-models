@@ -2,7 +2,9 @@ import torch
 import torch.nn.functional as F
 
 from torch import Tensor
+from typing import Optional
 
+from .custom_ops.fused_bias_act import FusedBiasAct
 from .custom_ops.upfirdn_2d import UpFirDn2D
 
 
@@ -74,6 +76,11 @@ def upfirdn_2d_cuda(x, w, up=1, down=1, pad0=0, pad1=0):
     N, C, H, W = x.shape
     assert H > 0 and W > 0
     return UpFirDn2D.apply(x, w, (up, up), (down, down), (pad0, pad1, pad0, pad1))
+
+
+def fused_bias_act(x, b=None, axis=1, act='linear', alpha=None, gain=None):
+    # type: (Tensor, Optional[Tensor], int, str, Optional[float], Optional[float]) -> Tensor
+    return FusedBiasAct.apply(x, b, axis, act, alpha, gain)
 
 
 def minibatch_stddev(x: Tensor, group_size: int, num_new_features: int, eps=1e-8):

@@ -7,7 +7,11 @@ setup(
         CUDAExtension('upfirdn_2d_op', [
             'upfirdn_2d.cpp',
             'upfirdn_2d_kernel.cu',
-        ])
+        ]),
+        CUDAExtension('fused_bias_act_op', [
+            'fused_bias_act.cpp',
+            'fused_bias_act_kernel.cu',
+        ]),
     ],
     cmdclass={
         'build_ext': BuildExtension
