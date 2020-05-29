@@ -3,7 +3,6 @@ import random
 import torch
 import torch.nn.functional as F
 
-from functools import partial
 from torch import nn, Tensor
 from typing import List, Optional, Tuple
 
@@ -18,10 +17,10 @@ def is_fused_bias_act(impl: str):
     return impl == "cuda_full"
 
 
-def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias_channels=None, lr_mult=1.0):
-    # type: (Optional[str], Optional[bool], Optional[float], Optional[float], Optional[int], Optional[float]) -> nn.Module
+def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias=True, channels=None, lr_mult=1.0):
+    # type: (Optional[str], Optional[bool], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> nn.Module
     if fused_bias_act:
-        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias_channels=bias_channels,
+        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias=bias, channels=channels,
                                    lr_mult=lr_mult)
     if name != "lrelu":
         raise NotImplementedError("try cuda_full impl")
@@ -32,23 +31,26 @@ def conv_lrelu(in_channels, out_channels, kernel=3, bias=True, fused_bias_act=Fa
     # type: (int, int, Optional[int], Optional[bool], Optional[bool]) -> Tuple[nn.Module, nn.Module]
     conv = EqualizedLRConv2d(in_channels, out_channels,
                              kernel_size=kernel,
-                             padding=kernel // 2,
-                             bias=bias and not fused_bias_act)
+                             padding=(kernel // 2),
+                             bias=(bias and not fused_bias_act))
 
     act_fn = act_func(name="lrelu",
                       fused_bias_act=fused_bias_act,
-                      bias_channels=out_channels if bias else None)
+                      bias=bias,
+                      channels=out_channels)
     return conv, act_fn
 
 
 def linear_lrelu(in_features, out_features, bias=True, fused_bias_act=False, lr_mult=1.0):
     # type: (int, int, Optional[bool], Optional[bool], Optional[float]) -> Tuple[nn.Module, nn.Module]
-    linear = EqualizedLRLinear(in_features, out_features, bias=bias and not fused_bias_act,
+    linear = EqualizedLRLinear(in_features, out_features,
+                               bias=(bias and not fused_bias_act),
                                lr_mult=lr_mult)
 
     act_fn = act_func(name="lrelu",
                       fused_bias_act=fused_bias_act,
-                      bias_channels=out_features if bias else None,
+                      bias=bias,
+                      channels=out_features,
                       lr_mult=lr_mult)
     return linear, act_fn
 
@@ -78,15 +80,16 @@ class StyledLayer(nn.Module):
         fused_bias_act = is_fused_bias_act(impl)
         self.style = style_transform(style_dim, in_channels)
         self.conv = ModulatedConv2d(
-            in_channels, out_channels, kernel_size=3, bias=not fused_bias_act, upsample=upsample,
-            impl=impl, blur_kernel=blur_kernel)
+            in_channels, out_channels, kernel_size=3, bias=(not fused_bias_act),
+            upsample=upsample, impl=impl, blur_kernel=blur_kernel)
 
         if noise is not None:
             self.add_noise = AddConstNoise(noise)
         else:
             self.add_noise = AddRandomNoise()
 
-        self.act_fn = act_func("lrelu", fused_bias_act=fused_bias_act, bias_channels=out_channels)
+        self.act_fn = act_func("lrelu", fused_bias_act=fused_bias_act, bias=True,
+                               channels=out_channels)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
@@ -110,7 +113,7 @@ class ToRGB(nn.Module):
 class FromRGB(nn.Module):
     def __init__(self, in_channels, out_channels, impl="ref"):
         super(FromRGB, self).__init__()
-        conv, act_fn = conv_lrelu(in_channels, out_channels, kernel=1,
+        conv, act_fn = conv_lrelu(in_channels, out_channels, kernel=1, bias=True,
                                   fused_bias_act=is_fused_bias_act(impl))
         self.conv = conv
         self.act_fn = act_fn
@@ -135,9 +138,10 @@ class ResidualBlock(nn.Module):
                                              impl=impl, blur_kernel=blur_kernel)]
 
         self.conv = nn.Sequential(
-            *conv_lrelu(in_channels, in_channels, kernel=3, fused_bias_act=fused_bias_act),
+            # TODO: using fused ops here causes gradients to explode
+            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True, fused_bias_act=False),
             *conv_layers,
-            act_func("lrelu", fused_bias_act=fused_bias_act, bias_channels=out_channels))
+            act_func("lrelu", fused_bias_act=fused_bias_act, bias=True, channels=out_channels))
         self.skip = nn.Sequential(*skip_layers)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -466,7 +470,8 @@ class Discriminator(nn.Module):
         mbstd_ch = mbstd_num_features * int(mbstd_group_size > 1)
         fused_bias_act = is_fused_bias_act(impl)
 
-        out = [*conv_lrelu(nf(1) + mbstd_ch, nf(1), kernel=3, fused_bias_act=fused_bias_act),
+        out = [*conv_lrelu(nf(1) + mbstd_ch, nf(1), kernel=3, bias=True,
+                           fused_bias_act=fused_bias_act),
                Flatten(),
                *linear_lrelu(nf(1) * 4 ** 2, nf(0), bias=True, fused_bias_act=fused_bias_act),
                EqualizedLRLinear(nf(0), max(num_classes, 1), bias=True)]
