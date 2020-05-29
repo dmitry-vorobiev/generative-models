@@ -7,7 +7,8 @@ from torch import nn, Tensor
 from typing import List, Optional, Tuple
 
 from .layers import AddBias, AddConstNoise, AddRandomNoise, ConcatMiniBatchStddev, Input, \
-    EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, Normalize, ConcatLabels
+    EqualizedLRConv2d, EqualizedLRLinear, EqualizedLRLeakyReLU, Flatten, FusedBiasActivation, \
+    Normalize, ConcatLabels
 from .mod_conv import setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 from .ops import upfirdn_2d_cuda, upfirdn_2d_opt
 
@@ -37,17 +38,24 @@ def style_transform(in_features, out_features):
 
 
 class StyledLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, style_dim, upsample=False,
-                 impl="ref", blur_kernel=None, noise=None):
+    def __init__(self, in_channels, out_channels, style_dim, upsample=False, impl="ref",
+                 blur_kernel=None, noise=None):
         super(StyledLayer, self).__init__()
+        fused_bias_act = impl == "cuda_full"
         self.style = style_transform(style_dim, in_channels)
-        self.conv = ModulatedConv2d(in_channels, out_channels, kernel_size=3, upsample=upsample,
-                                    impl=impl, blur_kernel=blur_kernel)
+        self.conv = ModulatedConv2d(
+            in_channels, out_channels, kernel_size=3, bias=not fused_bias_act, upsample=upsample,
+            impl=impl, blur_kernel=blur_kernel)
+
         if noise is not None:
             self.add_noise = AddConstNoise(noise)
         else:
             self.add_noise = AddRandomNoise()
-        self.act_fn = EqualizedLRLeakyReLU(inplace=True)
+
+        if fused_bias_act:
+            self.act_fn = FusedBiasActivation(act="lrelu", bias_channels=out_channels)
+        else:
+            self.act_fn = EqualizedLRLeakyReLU(inplace=True)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)

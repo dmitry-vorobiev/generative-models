@@ -3,10 +3,11 @@ import math
 import torch
 import torch.nn.functional as F
 
+from functools import partial
 from torch import nn, Tensor
 from typing import Any, Callable, Optional
 
-from .ops import minibatch_stddev
+from .ops import fused_bias_act, minibatch_stddev
 
 
 def equalized_lr_init(weight, bias, scale_weights=True, lr_mult=1.0, transposed=False):
@@ -38,6 +39,27 @@ class EqualizedLRLeakyReLU(nn.LeakyReLU):
         else:
             x = x * self.gain
         return F.leaky_relu(x, self.negative_slope, self.inplace)
+
+
+class FusedBiasActivation(nn.Module):
+    def __init__(self, act='lrelu', alpha=None, gain=None, bias_channels=None):
+        # type: (Optional[str], Optional[float], Optional[float], Optional[int]) -> FusedBiasActivation
+        super(FusedBiasActivation, self).__init__()
+        self.act = act
+        self.alpha = alpha
+        self.gain = gain
+
+        if bias_channels is not None:
+            self.bias = nn.Parameter(torch.empty(bias_channels), requires_grad=True)
+            self.reset_parameters()
+        else:
+            self.bias = None
+
+    def reset_parameters(self):
+        nn.init.zeros_(self.bias)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return fused_bias_act(x, self.bias, act=self.act, alpha=self.alpha, gain=self.gain)
 
 
 class AddRandomNoise(nn.Module):

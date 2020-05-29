@@ -9,8 +9,8 @@ torch::Tensor fused_bias_act_op(
     int grad,
     int axis,
     int act,
-    int alpha,
-    int gain);
+    float alpha,
+    float gain);
 
 // C++ interface
 
@@ -26,8 +26,8 @@ torch::Tensor fused_bias_act(
     int grad,
     int axis,
     int act,
-    int alpha,
-    int gain) 
+    float alpha,
+    float gain)
 {
     CHECK_INPUT(x);
     CHECK_INPUT(b);
@@ -46,5 +46,14 @@ torch::Tensor fused_bias_act(
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("call", &fused_bias_act, "fused bias addition -> activation func (CUDA)");
+    using namespace py;
+    m.def("call", &fused_bias_act, "Fused ops: y = act(x + b) * gain (CUDA)", 
+    arg("x"), 
+    arg("b"), 
+    arg("ref"), 
+    arg("grad")  = 0, 
+    arg("axis")  = 1, 
+    arg("act")   = 0, 
+    arg("alpha") = 0.0, 
+    arg("gain")  = 1.0);
 }

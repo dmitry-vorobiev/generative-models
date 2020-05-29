@@ -62,71 +62,68 @@ class FusedBiasAct(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, b=None, axis=1, act='linear', alpha=None, gain=None):
         # type: (Any, Tensor, Optional[Tensor], int, str, Optional[float], Optional[float]) -> Tensor
-        empty_tensor = x.new_empty([0])
+        empty = x.new_empty([0])
         if b is None:
-            b = empty_tensor
+            b = empty
 
-        act_spec = FUNCS[act]
+        spec = FUNCS[act]
         assert b.ndim == 1 and (b.shape[0] == 0 or b.shape[0] == x.shape[axis])
         assert b.shape[0] == 0 or 0 <= axis < x.ndim
         if alpha is None:
-            alpha = act_spec['alpha']
+            alpha = spec['alpha'] or 0.0
         if gain is None:
-            gain = act_spec['gain']
+            gain = spec['gain'] or 1.0
 
         # Special cases.
         if act == 'linear' and b is None and gain == 1.0:
             return x
-        if act_spec['cuda_idx'] is None:
+        if spec['cuda_idx'] is None:
             raise NotImplementedError("sorry, bro...")
-        if not act_spec['zero_2nd_grad']:
+        if not spec['zero_2nd_grad']:
             raise NotImplementedError("sorry, bro...")
 
-        kwargs = dict(axis=axis, act=act_spec['cuda_idx'], alpha=alpha, gain=gain)
-        y = fused_bias_act_op.call(x, b, ref=empty_tensor, grad=0, **kwargs)
-        ctx.save_for_backward(y, x, b)
+        kwargs = dict(axis=axis, act=spec['cuda_idx'], alpha=alpha, gain=gain)
+        y = fused_bias_act_op.call(x, b, ref=empty, grad=0, **kwargs)
+
+        ref = {'x': x, 'y': y}[spec['ref']]
+        ctx.save_for_backward(x, b, ref)
         ctx.kwargs = kwargs
         return y
 
     @staticmethod
     def backward(ctx: Any, dy: Tensor):
-        y, x, b = ctx.saved_tensors
-        dx, db = FusedBiasActBackward.apply(dy, y, x, b, ctx.kwargs)
+        x, b, ref = ctx.saved_tensors
+        dx, db = FusedBiasActBackward.apply(dy, x, b, ref, ctx.kwargs)
         return dx, db, None, None, None, None
 
 
 class FusedBiasActBackward(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, dy, y, x, b, kwargs):
+    def forward(ctx, dy, x, b, ref, kwargs):
         # type: (Any, Tensor, Tensor, Tensor, Tensor, Mapping[str, Any]) -> Tuple[Tensor, Tensor]
-        cls = FusedBiasActBackward
-        dx = cls.grad_dx(dy, x, y, kwargs)
-        db = cls.grad_db(dx, x, b, kwargs)
+        dx = FusedBiasActBackward._grad_dx(dy, ref, kwargs)
+        db = FusedBiasActBackward._grad_db(dx, b, kwargs['axis'], x.ndim)
+        ctx.save_for_backward(ref)
         ctx.kwargs = kwargs
         return dx, db
 
     @staticmethod
-    def backward(ctx: Any, d_dx: Tensor, d_db: Tensor, x: Tensor, y: Tensor):
-        kwargs = ctx.kwargs
-        ref = {'x': x, 'y': y}[kwargs['ref']]
-        d_dy: Tensor = fused_bias_act_op(d_dx, d_db, ref, grad=1, **kwargs)
-        return d_dy, None, None, None, None
+    def backward(ctx: Any, d_dx: Tensor, d_db: Tensor):
+        ref, = ctx.saved_tensors
+        d_dy: Tensor = fused_bias_act_op.call(d_dx, d_db, ref, grad=1, **ctx.kwargs)
+        return d_dy, None, None, None, None, None
 
     @staticmethod
-    def grad_dx(dy, x, y, kwargs):
-        # type: (Tensor, Tensor, Tensor, Mapping[str, Any]) -> Tensor
-        ref = {'x': x, 'y': y}[kwargs['ref']]
-        return fused_bias_act_op.call(dy, x.new_empty([0]), ref, grad=1, **kwargs)
+    def _grad_dx(dy: Tensor, ref: Tensor, kwargs: Mapping[str, Any]) -> Tensor:
+        return fused_bias_act_op.call(dy, dy.new_empty([0]), ref, grad=1, **kwargs)
 
     @staticmethod
-    def grad_db(dx, x, b, kwargs):
-        # type: (Tensor, Tensor, Tensor, Mapping[str, Any]) -> Tensor
+    def _grad_db(dx: Tensor, b: Tensor, axis: int, n_axis: int) -> Tensor:
         if b.shape[0] == 0:
             return b.new_empty([0])
-        axis = kwargs['axis']
         db = dx
-        if axis < x.ndim - 1:
-            db = torch.sum(db, list(range(axis + 1, x.ndim)))
+        if axis < n_axis - 1:
+            db = torch.sum(db, list(range(axis + 1, n_axis)))
         if axis > 0:
             db = torch.sum(db, list(range(axis)))
         return db

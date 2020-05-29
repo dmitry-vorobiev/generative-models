@@ -125,8 +125,8 @@ torch::Tensor fused_bias_act_op(
     int grad,
     int axis,
     int act,
-    int alpha,
-    int gain)
+    float alpha,
+    float gain)
 {
     OP_CHECK_CUDA_ERROR(cudaSetDevice(x.get_device()));
 
@@ -142,6 +142,12 @@ torch::Tensor fused_bias_act_op(
         p.b = (b.numel()) ? b.data_ptr<scalar_t>() : nullptr;
         p.ref = (ref.numel()) ? ref.data_ptr<scalar_t>() : nullptr;
         p.y = y.data_ptr<scalar_t>();
+
+        p.grad = grad;
+        p.axis = axis;
+        p.act = act;
+        p.alpha = alpha;
+        p.gain = gain;
 
         p.sizeX = (int)x.numel();
         p.sizeB = (int)b.numel();
