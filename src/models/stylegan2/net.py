@@ -17,10 +17,11 @@ def is_fused_bias_act(impl: str):
     return impl == "cuda_full"
 
 
-def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias=True, channels=None, lr_mult=1.0):
+def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias=True, bias_dim=None,
+             lr_mult=1.0):
     # type: (Optional[str], Optional[bool], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> nn.Module
     if fused_bias_act:
-        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias=bias, channels=channels,
+        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias=bias, bias_dim=bias_dim,
                                    lr_mult=lr_mult)
     if name != "lrelu":
         raise NotImplementedError("try cuda_full impl")
@@ -37,7 +38,7 @@ def conv_lrelu(in_channels, out_channels, kernel=3, bias=True, fused_bias_act=Fa
     act_fn = act_func(name="lrelu",
                       fused_bias_act=fused_bias_act,
                       bias=bias,
-                      channels=out_channels)
+                      bias_dim=out_channels)
     return conv, act_fn
 
 
@@ -50,7 +51,7 @@ def linear_lrelu(in_features, out_features, bias=True, fused_bias_act=False, lr_
     act_fn = act_func(name="lrelu",
                       fused_bias_act=fused_bias_act,
                       bias=bias,
-                      channels=out_features,
+                      bias_dim=out_features,
                       lr_mult=lr_mult)
     return linear, act_fn
 
@@ -77,8 +78,9 @@ class StyledLayer(nn.Module):
     def __init__(self, in_channels, out_channels, style_dim, upsample=False, impl="ref",
                  blur_kernel=None, noise=None):
         super(StyledLayer, self).__init__()
-        fused_bias_act = is_fused_bias_act(impl)
         self.style = style_transform(style_dim, in_channels)
+
+        fused_bias_act = is_fused_bias_act(impl)
         self.conv = ModulatedConv2d(
             in_channels, out_channels, kernel_size=3, bias=(not fused_bias_act),
             upsample=upsample, impl=impl, blur_kernel=blur_kernel)
@@ -88,14 +90,14 @@ class StyledLayer(nn.Module):
         else:
             self.add_noise = AddRandomNoise()
 
-        self.act_fn = act_func("lrelu", fused_bias_act=fused_bias_act, bias=True,
-                               channels=out_channels)
+        self.act_fn = act_func(name="lrelu", fused_bias_act=fused_bias_act, bias=True,
+                               bias_dim=out_channels)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
         x = self.conv(x, y)
-        x = self.act_fn(self.add_noise(x))
-        return x
+        x = self.add_noise(x)
+        return self.act_fn(x)
 
 
 class ToRGB(nn.Module):
@@ -106,20 +108,18 @@ class ToRGB(nn.Module):
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
-        x = self.conv(x, y)
-        return x
+        return self.conv(x, y)
 
 
 class FromRGB(nn.Module):
     def __init__(self, in_channels, out_channels, impl="ref"):
         super(FromRGB, self).__init__()
-        conv, act_fn = conv_lrelu(in_channels, out_channels, kernel=1, bias=True,
-                                  fused_bias_act=is_fused_bias_act(impl))
-        self.conv = conv
-        self.act_fn = act_fn
+        self.conv, self.act_fn = conv_lrelu(in_channels, out_channels, kernel=1, bias=True,
+                                            fused_bias_act=is_fused_bias_act(impl))
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.act_fn(self.conv(x))
+        x = self.conv(x)
+        return self.act_fn(x)
 
 
 class ResidualBlock(nn.Module):
@@ -138,15 +138,13 @@ class ResidualBlock(nn.Module):
                                              impl=impl, blur_kernel=blur_kernel)]
 
         self.conv = nn.Sequential(
-            # TODO: using fused ops here causes gradients to explode
-            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True, fused_bias_act=False),
+            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True, fused_bias_act=fused_bias_act),
             *conv_layers,
-            act_func("lrelu", fused_bias_act=fused_bias_act, bias=True, channels=out_channels))
+            act_func("lrelu", fused_bias_act=fused_bias_act, bias=True, bias_dim=out_channels))
         self.skip = nn.Sequential(*skip_layers)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.conv(x) + self.skip(x)
-        return x * (1 / math.sqrt(2))
+        return (self.conv(x) + self.skip(x)) * (1 / math.sqrt(2))
 
 
 class MappingNet(nn.Module):

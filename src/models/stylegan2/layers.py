@@ -42,7 +42,7 @@ class EqualizedLRLeakyReLU(nn.LeakyReLU):
 
 
 class FusedBiasActivation(nn.Module):
-    def __init__(self, act='lrelu', alpha=None, gain=None, bias=True, channels=None, lr_mult=1.0):
+    def __init__(self, act='lrelu', alpha=None, gain=None, bias=False, bias_dim=None, lr_mult=1.0):
         # type: (Optional[str], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> FusedBiasActivation
         super(FusedBiasActivation, self).__init__()
         self.act = act
@@ -51,9 +51,9 @@ class FusedBiasActivation(nn.Module):
         self.lr_mult = lr_mult
 
         if bias:
-            if channels is None or channels < 1:
+            if bias_dim is None or bias_dim < 1:
                 raise AttributeError("bias_channels must be a positive number")
-            self.bias = nn.Parameter(torch.empty(channels), requires_grad=True)
+            self.bias = nn.Parameter(torch.empty(bias_dim), requires_grad=True)
             self.reset_parameters()
         else:
             self.bias = None
