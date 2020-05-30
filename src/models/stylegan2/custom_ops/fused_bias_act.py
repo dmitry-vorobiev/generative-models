@@ -120,6 +120,6 @@ class FusedBiasActBackward(torch.autograd.Function):
     @staticmethod
     def _grad_db(dx: Tensor, b: Tensor, axis: int) -> Tensor:
         if b.shape[0] == 0:
-            return b.new_empty([0])
+            return b.new_zeros([0])
         dims = list(filter(lambda ax: ax != axis, range(dx.ndim)))
         return torch.sum(dx, dims)

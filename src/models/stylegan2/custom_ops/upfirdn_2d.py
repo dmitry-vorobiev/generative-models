@@ -52,7 +52,7 @@ class UpFirDn2D(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, kernel, up, down, pad):
         # type: (Any, Tensor, Tensor, Tuple2Int, Tuple2Int, Tuple4Int) -> Tensor
-        y = upfirdn_2d_op.execute(x, kernel, *up, *down, *pad)
+        y = upfirdn_2d_op.call(x, kernel, *up, *down, *pad)
         inH, inW = x.shape[-2:]
         # outH, outW = y.shape[-2:]
         kernelH, kernelW = kernel.shape
@@ -90,7 +90,7 @@ class UpFirDn2DBackward(torch.autograd.Function):
     @staticmethod
     def forward(ctx, dy, kernel, dkernel, up, down, pad, dpad):
         # type: (Any, Tensor, Tensor, Tensor, Tuple2Int, Tuple2Int, Tuple4Int, Tuple4Int) -> Tensor
-        dx = upfirdn_2d_op.execute(dy, dkernel, *down, *up, *dpad)
+        dx = upfirdn_2d_op.call(dy, dkernel, *down, *up, *dpad)
         ctx.up = up
         ctx.down = down
         ctx.pad = pad
@@ -100,5 +100,5 @@ class UpFirDn2DBackward(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, ddy: Tensor):
         kernel, = ctx.saved_tensors
-        ddx: Tensor = upfirdn_2d_op.execute(ddy, kernel, *ctx.up, *ctx.down, *ctx.pad)
+        ddx: Tensor = upfirdn_2d_op.call(ddy, kernel, *ctx.up, *ctx.down, *ctx.pad)
         return ddx, None, None, None, None, None, None

@@ -133,7 +133,7 @@ torch::Tensor fused_bias_act_op(
     cudaStream_t stream;
     OP_CHECK_CUDA_ERROR(cudaStreamCreate(&stream));
 
-    auto y = at::empty_like(x);
+    auto y = at::zeros_like(x);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(x.scalar_type(), "fused_bias_act_closure", [&] {
         FusedBiasActKernelParams<scalar_t> p;
