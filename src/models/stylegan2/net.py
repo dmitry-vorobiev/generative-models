@@ -13,20 +13,57 @@ from .mod_conv import setup_blur_weights, ModulatedConv2d, Conv2d_Downsample
 from .ops import upfirdn_2d_cuda, upfirdn_2d_opt
 
 
-def conv_lrelu(in_ch, out_ch, kernel=3, bias=True):
-    # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
-    padding = kernel // 2
-    return [EqualizedLRConv2d(in_ch, out_ch, kernel_size=kernel, padding=padding, bias=bias),
-            EqualizedLRLeakyReLU(inplace=True)]
+def is_fused_bias_act(impl: str):
+    return impl == "cuda_full"
 
 
-def conv_down_torch(in_ch, out_ch, kernel=3, bias=True):
+def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias=True, bias_dim=None,
+             lr_mult=1.0):
+    # type: (Optional[str], Optional[bool], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> nn.Module
+    if fused_bias_act:
+        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias=bias, bias_dim=bias_dim,
+                                   lr_mult=lr_mult)
+    if name != "lrelu":
+        raise NotImplementedError("try cuda_full impl")
+    return EqualizedLRLeakyReLU(inplace=True)
+
+
+def conv_lrelu(in_channels, out_channels, kernel=3, bias=True, fused_bias_act=False):
+    # type: (int, int, Optional[int], Optional[bool], Optional[bool]) -> Tuple[nn.Module, nn.Module]
+    conv = EqualizedLRConv2d(in_channels, out_channels,
+                             kernel_size=kernel,
+                             padding=(kernel // 2),
+                             bias=(bias and not fused_bias_act))
+
+    act_fn = act_func(name="lrelu",
+                      fused_bias_act=fused_bias_act,
+                      bias=bias,
+                      bias_dim=out_channels)
+    return conv, act_fn
+
+
+def linear_lrelu(in_features, out_features, bias=True, fused_bias_act=False, lr_mult=1.0):
+    # type: (int, int, Optional[bool], Optional[bool], Optional[float]) -> Tuple[nn.Module, nn.Module]
+    linear = EqualizedLRLinear(in_features, out_features,
+                               bias=(bias and not fused_bias_act),
+                               lr_mult=lr_mult)
+
+    act_fn = act_func(name="lrelu",
+                      fused_bias_act=fused_bias_act,
+                      bias=bias,
+                      bias_dim=out_features,
+                      lr_mult=lr_mult)
+    return linear, act_fn
+
+
+def conv_down_torch(in_channels, out_channels, kernel=3, bias=True):
     # type: (int, int, Optional[int], Optional[bool]) -> List[nn.Module]
     padding = kernel // 2
-    layers = [EqualizedLRConv2d(in_ch, out_ch, kernel_size=kernel, padding=padding, bias=False),
+    layers = [EqualizedLRConv2d(in_channels, out_channels, kernel_size=kernel,
+                                padding=padding, bias=False),
               nn.AvgPool2d(2)]
     if bias:
-        layers.append(AddBias(out_ch))
+        layers.append(AddBias(out_channels))
     return layers
 
 
@@ -41,27 +78,26 @@ class StyledLayer(nn.Module):
     def __init__(self, in_channels, out_channels, style_dim, upsample=False, impl="ref",
                  blur_kernel=None, noise=None):
         super(StyledLayer, self).__init__()
-        fused_bias_act = impl == "cuda_full"
         self.style = style_transform(style_dim, in_channels)
+
+        fused_bias_act = is_fused_bias_act(impl)
         self.conv = ModulatedConv2d(
-            in_channels, out_channels, kernel_size=3, bias=not fused_bias_act, upsample=upsample,
-            impl=impl, blur_kernel=blur_kernel)
+            in_channels, out_channels, kernel_size=3, bias=(not fused_bias_act),
+            upsample=upsample, impl=impl, blur_kernel=blur_kernel)
 
         if noise is not None:
             self.add_noise = AddConstNoise(noise)
         else:
             self.add_noise = AddRandomNoise()
 
-        if fused_bias_act:
-            self.act_fn = FusedBiasActivation(act="lrelu", bias_channels=out_channels)
-        else:
-            self.act_fn = EqualizedLRLeakyReLU(inplace=True)
+        self.act_fn = act_func(name="lrelu", fused_bias_act=fused_bias_act, bias=True,
+                               bias_dim=out_channels)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
         x = self.conv(x, y)
-        x = self.act_fn(self.add_noise(x))
-        return x
+        x = self.add_noise(x)
+        return self.act_fn(x)
 
 
 class ToRGB(nn.Module):
@@ -72,43 +108,43 @@ class ToRGB(nn.Module):
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         y = self.style(w)
-        x = self.conv(x, y)
-        return x
+        return self.conv(x, y)
 
 
 class FromRGB(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, impl="ref"):
         super(FromRGB, self).__init__()
-        self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size=1, stride=1,
-                                      padding=0, bias=True)
-        self.act_fn = EqualizedLRLeakyReLU(inplace=True)
+        self.conv, self.act_fn = conv_lrelu(in_channels, out_channels, kernel=1, bias=True,
+                                            fused_bias_act=is_fused_bias_act(impl))
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.act_fn(self.conv(x))
+        x = self.conv(x)
+        return self.act_fn(x)
 
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, impl="ref", blur_kernel=None):
         super(ResidualBlock, self).__init__()
+        fused_bias_act = is_fused_bias_act(impl)
 
-        if impl in ["ref", "cuda"]:
-            conv_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=3, bias=True,
+        if impl == "torch":
+            conv_layers = conv_down_torch(in_channels, out_channels, kernel=3, bias=True)
+            skip_layers = conv_down_torch(in_channels, out_channels, kernel=1, bias=False)
+        else:
+            bias = not fused_bias_act
+            conv_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=3, bias=bias,
                                              impl=impl, blur_kernel=blur_kernel)]
             skip_layers = [Conv2d_Downsample(in_channels, out_channels, kernel_size=1, bias=False,
                                              impl=impl, blur_kernel=blur_kernel)]
-        else:
-            conv_layers = conv_down_torch(in_channels, out_channels, kernel=3, bias=True)
-            skip_layers = conv_down_torch(in_channels, out_channels, kernel=1, bias=False)
 
         self.conv = nn.Sequential(
-            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True),
+            *conv_lrelu(in_channels, in_channels, kernel=3, bias=True, fused_bias_act=fused_bias_act),
             *conv_layers,
-            EqualizedLRLeakyReLU(inplace=True))
+            act_func("lrelu", fused_bias_act=fused_bias_act, bias=True, bias_dim=out_channels))
         self.skip = nn.Sequential(*skip_layers)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.conv(x) + self.skip(x)
-        return x * (1 / math.sqrt(2))
+        return (self.conv(x) + self.skip(x)) * (1 / math.sqrt(2))
 
 
 class MappingNet(nn.Module):
@@ -126,8 +162,8 @@ class MappingNet(nn.Module):
         lr_mult: Learning rate multiplier for the mapping layers.
         normalize_latent: Normalize latent vectors (Z) before feeding them to the mapping layers?
     """
-    def __init__(self, latent_dim=512, num_classes=0, style_dim=512,
-                 num_layers=8, hidden_dim=512, lr_mult=0.01, normalize_latent=True):
+    def __init__(self, latent_dim=512, num_classes=0, style_dim=512, num_layers=8,
+                 hidden_dim=512, lr_mult=0.01, normalize_latent=True, impl="ref"):
         super(MappingNet, self).__init__()
         in_fmaps = latent_dim
         self.cat_label = None
@@ -135,11 +171,14 @@ class MappingNet(nn.Module):
             self.cat_label = ConcatLabels(num_classes, latent_dim)
             in_fmaps = latent_dim * 2
 
+        fused_bias_act = is_fused_bias_act(impl)
         layers = [Normalize()] if normalize_latent else []
         features = [in_fmaps] + [hidden_dim] * (num_layers - 1) + [style_dim]
+
         for i in range(num_layers):
-            layers += [EqualizedLRLinear(features[i], features[i + 1], lr_mult=lr_mult),
-                       EqualizedLRLeakyReLU(inplace=True)]
+            layers += list(linear_lrelu(features[i], features[i + 1],
+                                        fused_bias_act=fused_bias_act,
+                                        lr_mult=lr_mult))
         self.layers = nn.Sequential(*layers)
 
     def forward(self, z, label=None):
@@ -180,15 +219,15 @@ class SynthesisNet(nn.Module):
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
 
-        if impl not in ["torch", "ref", "cuda"]:
+        if impl not in ["torch", "ref", "cuda", "cuda_full"]:
             raise AttributeError("impl should be one of [torch, ref, cuda]")
 
-        if impl in ["ref", "cuda"]:
+        if impl != "torch":
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
 
             up = 2
-            weight_blur = setup_blur_weights(blur_kernel, up=up, impl=impl)
+            weight_blur = setup_blur_weights(blur_kernel, up=up, is_ref=(impl == "ref"))
             self.register_buffer("weight_blur", weight_blur)
 
             p = weight_blur.size(-1) - up
@@ -237,6 +276,8 @@ class SynthesisNet(nn.Module):
 
     def _upsample_cuda(self, x: Tensor) -> Tensor:
         return upfirdn_2d_cuda(x, self.weight_blur, up=2, pad0=self.pad0, pad1=self.pad1)
+
+    _upsample_cuda_full = _upsample_cuda
 
     def forward(self, w: Tensor) -> Tensor:
         # w: (num_layers, batch_size, style_dim)
@@ -303,7 +344,7 @@ class Generator(nn.Module):
 
         self.mapping = MappingNet(
             latent_dim, num_classes, style_dim, num_mapping_layers, mapping_hidden_dim,
-            mapping_lr_mult, normalize_latent)
+            mapping_lr_mult, normalize_latent, impl)
 
         self.synthesis = SynthesisNet(
             img_res, img_channels, style_dim, fmap_base, fmap_decay, fmap_min, fmap_max,
@@ -401,16 +442,16 @@ class Discriminator(nn.Module):
         if img_res != 2 ** res_log2:
             raise AttributeError("Image resolution must be a power of 2")
 
-        if impl not in ["torch", "ref", "cuda"]:
-            raise AttributeError("impl should be one of [torch, ref, cuda]")
+        if impl not in ["torch", "ref", "cuda", "cuda_full"]:
+            raise AttributeError("impl should be one of [torch, ref, cuda, cuda_full]")
 
         self.num_classes = num_classes
 
-        if impl in ["ref", "cuda"]:
+        if impl != "torch":
             if blur_kernel is None:
                 blur_kernel = [1, 3, 3, 1]
 
-            weight_blur = setup_blur_weights(blur_kernel, down=2, impl=impl)
+            weight_blur = setup_blur_weights(blur_kernel, down=2, is_ref=(impl == "ref"))
             self.register_buffer("weight_blur", weight_blur)
         else:
             self.weight_blur = None
@@ -419,17 +460,20 @@ class Discriminator(nn.Module):
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
             return int(min(max(fmaps, fmap_min), fmap_max))
 
-        inp = FromRGB(img_channels, nf(res_log2 - 1))
+        inp = FromRGB(img_channels, nf(res_log2 - 1), impl=impl)
         main = [ResidualBlock(nf(res - 1), nf(res - 2), impl=impl,
                               blur_kernel=lambda: self.weight_blur)
                 for res in range(res_log2, 2, -1)]
 
         mbstd_ch = mbstd_num_features * int(mbstd_group_size > 1)
-        out = [*conv_lrelu(nf(1) + mbstd_ch, nf(1)),
+        fused_bias_act = is_fused_bias_act(impl)
+
+        out = [*conv_lrelu(nf(1) + mbstd_ch, nf(1), kernel=3, bias=True,
+                           fused_bias_act=fused_bias_act),
                Flatten(),
-               EqualizedLRLinear(nf(1) * 4 ** 2, nf(0), bias=True),
-               EqualizedLRLeakyReLU(inplace=True),
+               *linear_lrelu(nf(1) * 4 ** 2, nf(0), bias=True, fused_bias_act=fused_bias_act),
                EqualizedLRLinear(nf(0), max(num_classes, 1), bias=True)]
+
         if mbstd_ch:
             mbstd = ConcatMiniBatchStddev(mbstd_group_size, mbstd_num_features)
             out = [mbstd] + out

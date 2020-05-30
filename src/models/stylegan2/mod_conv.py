@@ -18,12 +18,12 @@ def _setup_kernel(k: Sequence[int], device=None) -> Tensor:
     return k
 
 
-def setup_blur_weights(k: Sequence[int], up=0, down=0, impl="ref") -> Tensor:
+def setup_blur_weights(k: Sequence[int], up=0, down=0, is_ref=True) -> Tensor:
     assert not (up and down)
     if k is None:
         k = [1] * (up or down)
     k = _setup_kernel(k) * max(1, up ** 2)
-    if impl == "ref":
+    if is_ref:
         # from _upfirdn_2d_ref:
         # w = tf.constant(k[::-1, ::-1, np.newaxis, np.newaxis], dtype=x.dtype)
         k = torch.flip(k, dims=(0, 1))[None, None, :]
@@ -38,17 +38,17 @@ def _same(k: Sequence) -> bool:
 
 
 class BlurWeightsMixin(object):
-    def _init_blur_weights(self, blur_kernel, up=0, down=0, impl="ref"):
+    def _init_blur_weights(self, blur_kernel, up=0, down=0, is_ref=True):
         if blur_kernel is None:
             blur_kernel = [1, 3, 3, 1]
 
         if isinstance(blur_kernel, Sequence):
-            blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down, impl=impl)
+            blur_kernel = setup_blur_weights(blur_kernel, up=up, down=down, is_ref=is_ref)
 
         if isinstance(blur_kernel, Tensor):
             Hb, Wb = blur_kernel.shape[-2:]
             assert Hb == Wb, "only square kernels are supported"
-            if impl == "ref":
+            if is_ref:
                 C1, C0 = blur_kernel.shape[:2]
                 assert C1 == 1 and C0 == 1
             # noinspection PyUnresolvedReferences
@@ -69,8 +69,8 @@ class BlurWeightsMixin(object):
 class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, demodulate=True,
                  upsample=False, impl="ref", blur_kernel=None, scale_weights=True, lr_mult=1.0):
-        if impl not in ["torch", "ref", "cuda"]:
-            raise AttributeError("impl should be one of [torch, ref, cuda]")
+        if impl not in ["torch", "ref", "cuda", "cuda_full"]:
+            raise AttributeError("impl should be one of [torch, ref, cuda, cuda_full]")
 
         if isinstance(kernel_size, Sequence):
             if not _same(kernel_size):
@@ -86,14 +86,14 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         self.lr_mult = lr_mult
         self.weight_mult = 1.0
 
-        transposed = upsample and impl in ["ref", "cuda"]
+        transposed = upsample and impl != "torch"
         super(ModulatedConv2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             transposed, _pair(0), groups=1, bias=bias, padding_mode='zeros')
 
         if upsample:
-            if impl in ["ref", "cuda"]:
-                self._init_blur_weights(blur_kernel, up=2, impl=impl)
+            if impl != "torch":
+                self._init_blur_weights(blur_kernel, up=2, is_ref=(impl == "ref"))
                 W_blur = self.weight_blur.size(-1)
                 W_conv = kernel_size[0]
                 p = (W_blur - 2) - (W_conv - 1)
@@ -125,6 +125,8 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         # type: (Tensor, Tensor) -> Tensor
         x = self._conv_transpose2d(x, w)
         return upfirdn_2d_cuda(x, self.weight_blur, pad0=self.pad0, pad1=self.pad1)
+
+    _upsample_conv2d_cuda_full = _upsample_conv2d_cuda
 
     def _upsample_conv2d_ref(self, x, w):
         # type: (Tensor, Tensor) -> Tensor
@@ -172,19 +174,21 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
 
 # noinspection PyPep8Naming
 class Conv2d_Downsample(nn.Module, BlurWeightsMixin):
-    upfirdn_2d_fn = dict(ref=upfirdn_2d_opt, cuda=upfirdn_2d_cuda)
+    upfirdn_2d_fn = dict(ref=upfirdn_2d_opt,
+                         cuda=upfirdn_2d_cuda,
+                         cuda_full=upfirdn_2d_cuda)
 
     def __init__(self, in_channels, out_channels, kernel_size, bias=True, impl="ref",
                  blur_kernel=None):
         super(Conv2d_Downsample, self).__init__()
 
-        if impl not in ["ref", "cuda"]:
-            raise AttributeError("impl should be one of [ref, cuda]")
+        if impl not in ["ref", "cuda", "cuda_full"]:
+            raise AttributeError("impl should be one of [ref, cuda, cuda_full]")
 
         down = 2
         self.conv = EqualizedLRConv2d(in_channels, out_channels, kernel_size, stride=down,
                                       bias=bias)
-        self._init_blur_weights(blur_kernel, down=down, impl=impl)
+        self._init_blur_weights(blur_kernel, down=down, is_ref=(impl == "ref"))
         W_blur = self.weight_blur.size(-1)
         W_conv = kernel_size if isinstance(kernel_size, int) else kernel_size[0]
         p = (W_blur - down) + (W_conv - 1)

@@ -29,8 +29,8 @@ def equalized_lr_init(weight, bias, scale_weights=True, lr_mult=1.0, transposed=
 
 
 class EqualizedLRLeakyReLU(nn.LeakyReLU):
-    def __init__(self, negative_slope=0.2, inplace=False, gain=math.sqrt(2)):
-        super(EqualizedLRLeakyReLU, self).__init__(negative_slope, inplace)
+    def __init__(self, alpha=0.2, inplace=False, gain=math.sqrt(2)):
+        super(EqualizedLRLeakyReLU, self).__init__(alpha, inplace)
         self.gain = gain
 
     def forward(self, x: Tensor) -> Tensor:
@@ -42,15 +42,18 @@ class EqualizedLRLeakyReLU(nn.LeakyReLU):
 
 
 class FusedBiasActivation(nn.Module):
-    def __init__(self, act='lrelu', alpha=None, gain=None, bias_channels=None):
-        # type: (Optional[str], Optional[float], Optional[float], Optional[int]) -> FusedBiasActivation
+    def __init__(self, act='lrelu', alpha=None, gain=None, bias=False, bias_dim=None, lr_mult=1.0):
+        # type: (Optional[str], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> FusedBiasActivation
         super(FusedBiasActivation, self).__init__()
         self.act = act
         self.alpha = alpha
         self.gain = gain
+        self.lr_mult = lr_mult
 
-        if bias_channels is not None:
-            self.bias = nn.Parameter(torch.empty(bias_channels), requires_grad=True)
+        if bias:
+            if bias_dim is None or bias_dim < 1:
+                raise AttributeError("bias_channels must be a positive number")
+            self.bias = nn.Parameter(torch.empty(bias_dim), requires_grad=True)
             self.reset_parameters()
         else:
             self.bias = None
@@ -59,7 +62,10 @@ class FusedBiasActivation(nn.Module):
         nn.init.zeros_(self.bias)
 
     def forward(self, x: Tensor) -> Tensor:
-        return fused_bias_act(x, self.bias, act=self.act, alpha=self.alpha, gain=self.gain)
+        bias = self.bias
+        if bias is not None:
+            bias = bias * self.lr_mult
+        return fused_bias_act(x, bias, act=self.act, alpha=self.alpha, gain=self.gain)
 
 
 class AddRandomNoise(nn.Module):

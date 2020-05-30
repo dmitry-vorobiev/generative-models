@@ -56,5 +56,17 @@ torch::Tensor upfirdn_2d(
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("execute", &upfirdn_2d, "upfirdn_2d (CUDA)");
+    using namespace py;
+
+    m.def("call", &upfirdn_2d, "Optimized upfirdn_2d op (CUDA)",
+    arg("input"), 
+    arg("kernel"), 
+    arg("upx")   = 1, 
+    arg("upy")   = 1, 
+    arg("downx") = 1, 
+    arg("downy") = 1, 
+    arg("padx0") = 0, 
+    arg("padx1") = 0,
+    arg("pady0") = 0,
+    arg("pady1") = 0);
 }

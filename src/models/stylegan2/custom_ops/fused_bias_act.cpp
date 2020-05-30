@@ -47,6 +47,7 @@ torch::Tensor fused_bias_act(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     using namespace py;
+    
     m.def("call", &fused_bias_act, "Fused ops: y = act(x + b) * gain (CUDA)", 
     arg("x"), 
     arg("b"), 

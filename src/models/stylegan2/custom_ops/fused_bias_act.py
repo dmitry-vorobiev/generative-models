@@ -83,7 +83,7 @@ class FusedBiasAct(torch.autograd.Function):
             raise NotImplementedError("sorry, bro...")
 
         kwargs = dict(axis=axis, act=spec['cuda_idx'], alpha=alpha, gain=gain)
-        y = fused_bias_act_op.call(x, b, ref=empty, grad=0, **kwargs)
+        y = fused_bias_act_op.call(x=x, b=b, ref=empty, grad=0, **kwargs)
 
         ref = {'x': x, 'y': y}[spec['ref']]
         ctx.save_for_backward(x, b, ref)
@@ -102,7 +102,7 @@ class FusedBiasActBackward(torch.autograd.Function):
     def forward(ctx, dy, x, b, ref, kwargs):
         # type: (Any, Tensor, Tensor, Tensor, Tensor, Mapping[str, Any]) -> Tuple[Tensor, Tensor]
         dx = FusedBiasActBackward._grad_dx(dy, ref, kwargs)
-        db = FusedBiasActBackward._grad_db(dx, b, kwargs['axis'], x.ndim)
+        db = FusedBiasActBackward._grad_db(dx, b, kwargs['axis'])
         ctx.save_for_backward(ref)
         ctx.kwargs = kwargs
         return dx, db
@@ -110,20 +110,16 @@ class FusedBiasActBackward(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, d_dx: Tensor, d_db: Tensor):
         ref, = ctx.saved_tensors
-        d_dy: Tensor = fused_bias_act_op.call(d_dx, d_db, ref, grad=1, **ctx.kwargs)
-        return d_dy, None, None, None, None, None
+        d_dy: Tensor = fused_bias_act_op.call(x=d_dx, b=d_db, ref=ref, grad=1, **ctx.kwargs)
+        return d_dy, None, None, None, None
 
     @staticmethod
     def _grad_dx(dy: Tensor, ref: Tensor, kwargs: Mapping[str, Any]) -> Tensor:
-        return fused_bias_act_op.call(dy, dy.new_empty([0]), ref, grad=1, **kwargs)
+        return fused_bias_act_op.call(x=dy, b=dy.new_empty([0]), ref=ref, grad=1, **kwargs)
 
     @staticmethod
-    def _grad_db(dx: Tensor, b: Tensor, axis: int, n_axis: int) -> Tensor:
+    def _grad_db(dx: Tensor, b: Tensor, axis: int) -> Tensor:
         if b.shape[0] == 0:
-            return b.new_empty([0])
-        db = dx
-        if axis < n_axis - 1:
-            db = torch.sum(db, list(range(axis + 1, n_axis)))
-        if axis > 0:
-            db = torch.sum(db, list(range(axis)))
-        return db
+            return b.new_zeros([0])
+        dims = list(filter(lambda ax: ax != axis, range(dx.ndim)))
+        return torch.sum(dx, dims)

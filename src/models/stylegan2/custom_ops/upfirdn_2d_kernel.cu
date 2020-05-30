@@ -238,7 +238,7 @@ torch::Tensor upfirdn_2d_op(
     int outH = (inH * upy + pady0 + pady1 - kernelH + downy) / downy;
     TORCH_CHECK(outW >= 1 && outH >= 1, "output must be at least 1x1");
 
-    auto output = at::empty({majorDim, outH, outW, minorDim}, input.options());
+    auto output = at::zeros({majorDim, outH, outW, minorDim}, input.options());
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "upfirdn_2d_closure", [&] {
         UpFirDn2DKernelParams<scalar_t> p;
