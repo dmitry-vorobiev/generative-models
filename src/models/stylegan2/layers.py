@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn.functional as F
 
-from functools import partial
 from torch import nn, Tensor
 from typing import Any, Callable, Optional
 
@@ -42,7 +41,8 @@ class EqualizedLRLeakyReLU(nn.LeakyReLU):
 
 
 class FusedBiasActivation(nn.Module):
-    def __init__(self, act='lrelu', alpha=None, gain=None, bias=False, bias_dim=None, lr_mult=1.0):
+    def __init__(self, act='lrelu', alpha=0.2, gain=math.sqrt(2), bias=False, bias_dim=None,
+                 lr_mult=1.0):
         # type: (Optional[str], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> FusedBiasActivation
         super(FusedBiasActivation, self).__init__()
         self.act = act
@@ -66,6 +66,18 @@ class FusedBiasActivation(nn.Module):
         if bias is not None:
             bias = bias * self.lr_mult
         return fused_bias_act(x, bias, act=self.act, alpha=self.alpha, gain=self.gain)
+
+    def extra_repr(self):
+        s = 'act={act}'
+        if self.bias is None:
+            s += ', bias={False}',
+        if self.alpha is not None:
+            s += ', alpha={alpha}'
+        if self.gain is not None:
+            s += ', gain={gain}'
+        if self.lr_mult != 1.0:
+            s += ', lr_mult={lr_mult}'
+        return s.format(**self.__dict__)
 
 
 class AddRandomNoise(nn.Module):
@@ -125,25 +137,39 @@ class AddBias(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return x.add(self.lr_mult, self.bias[:, None, None])
 
+    def extra_repr(self) -> str:
+        s = ''
+        if self.lr_mult != 1.0:
+            s += ', lr_mult={lr_mult}'
+        return s.format(**self.__dict__)
+
 
 class EqualizedLRLinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True,
                  scale_weights=True, lr_mult=1.0):
         self.scale_weights = scale_weights
         self.lr_mult = lr_mult
-        self.w_mult = 1.0
+        self.weight_mult = 1.0
         super(EqualizedLRLinear, self).__init__(in_features, out_features, bias)
 
     def reset_parameters(self):
-        self.w_mult = equalized_lr_init(
+        self.weight_mult = equalized_lr_init(
             self.weight, self.bias, self.scale_weights, self.lr_mult)
 
     def forward(self, x: Tensor) -> Tensor:
-        weight = self.weight * self.w_mult
+        weight = self.weight * self.weight_mult
         bias = self.bias
         if bias is not None:
             bias = bias * self.lr_mult
         return F.linear(x, weight, bias)
+
+    def extra_repr(self) -> str:
+        s = ''
+        if not self.scale_weights:
+            s += ', scale_weights=False'
+        if self.lr_mult != 1.0:
+            s += ', lr_mult={lr_mult}'
+        return super().extra_repr() + s.format(**self.__dict__)
 
 
 class EqualizedLRConv2d(nn.Conv2d):
@@ -152,13 +178,13 @@ class EqualizedLRConv2d(nn.Conv2d):
                  scale_weights=True, lr_mult=1.0):
         self.scale_weights = scale_weights
         self.lr_mult = lr_mult
-        self.w_mult = 1.0
+        self.weight_mult = 1.0
         super(EqualizedLRConv2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding,
             dilation, groups, bias, padding_mode='zeros')
 
     def reset_parameters(self):
-        self.w_mult = equalized_lr_init(
+        self.weight_mult = equalized_lr_init(
             self.weight, self.bias, self.scale_weights, self.lr_mult)
 
     def conv2d_forward(self, x, weight, bias):
@@ -167,11 +193,19 @@ class EqualizedLRConv2d(nn.Conv2d):
                         self.dilation, self.groups)
 
     def forward(self, x: Tensor) -> Tensor:
-        weight = self.weight * self.w_mult
+        weight = self.weight * self.weight_mult
         bias = self.bias
         if bias is not None:
             bias = bias * self.lr_mult
         return self.conv2d_forward(x, weight, bias)
+
+    def extra_repr(self) -> str:
+        s = ''
+        if not self.scale_weights:
+            s += ', scale_weights=False'
+        if self.lr_mult != 1.0:
+            s += ', lr_mult={lr_mult}'
+        return super().extra_repr() + s.format(**self.__dict__)
 
 
 class Normalize(nn.Module):
@@ -201,9 +235,12 @@ class ConcatMiniBatchStddev(nn.Module):
         self.num_new_features = num_new_features
 
     def forward(self, x: Tensor) -> Tensor:
-        y = minibatch_stddev(x, group_size=self.group_size,
-                             num_new_features=self.num_new_features)
+        y = minibatch_stddev(x, group_size=self.group_size, num_new_features=self.num_new_features)
         return torch.cat([x, y], dim=1)
+
+    def extra_repr(self) -> str:
+        s = 'group_size={group_size}, num_new_features={num_new_features}'
+        return s.format(**self.__dict__)
 
 
 class Lambda(nn.Module):

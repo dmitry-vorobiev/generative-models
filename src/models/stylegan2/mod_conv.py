@@ -82,6 +82,8 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         dilation = _pair(1)
 
         self.demodulate = demodulate
+        self.upsample = upsample
+        self.impl = impl
         self.scale_weights = scale_weights
         self.lr_mult = lr_mult
         self.weight_mult = 1.0
@@ -170,6 +172,18 @@ class ModulatedConv2d(_ConvNd, BlurWeightsMixin):
         if self.bias is not None:
             x = x.add(self.lr_mult, self.bias[:, None, None])
         return x
+
+    def extra_repr(self) -> str:
+        s = ', impl={impl}'
+        if not self.demodulate:
+            s += ', demodulate=False'
+        if self.upsample:
+            s += ', upsample=True'
+        if not self.scale_weights:
+            s += ', scale_weights=False'
+        if self.lr_mult != 1.0:
+            s += ', lr_mult={lr_mult}'
+        return super().extra_repr() + s.format(**self.__dict__)
 
 
 # noinspection PyPep8Naming
