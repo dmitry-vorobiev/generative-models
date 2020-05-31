@@ -122,7 +122,7 @@ def stringify(d: dict) -> str:
     return ", ".join(key_values)
 
 
-def error_if_unsupported(tf_class_name):
+def error_if_unsupported(tf_class_name: str):
     if tf_class_name not in SUPPORTED_MODELS:
         raise AttributeError('Found model type {}. Allowed model types are: {}'
                              .format(tf_class_name, SUPPORTED_MODELS))
@@ -145,7 +145,7 @@ def convert_kwargs(static_kwargs, mappings):
     return kwargs
 
 
-def convert_from_tf(tf_state) -> torch.nn.Module:
+def convert_from_tf(tf_state, impl: str) -> torch.nn.Module:
     tf_state = AttributeDict.convert_dict_recursive(tf_state)
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
@@ -160,13 +160,13 @@ def convert_from_tf(tf_state) -> torch.nn.Module:
             'style_mixing_prob': 'p_style_mix',
         })
 
-        kwargs_mapping, params_mapping = parse_G_mapping(tf_state.components.mapping)
+        kwargs_mapping, params_mapping = parse_G_mapping(tf_state.components.mapping, impl)
         kwargs.update(kwargs_mapping)
 
-        kwargs_synthesis, params_synthesis = parse_G_synthesis(tf_state.components.synthesis)
+        kwargs_synthesis, params_synthesis = parse_G_synthesis(tf_state.components.synthesis, impl)
         kwargs.update(kwargs_synthesis)
 
-        G = Generator(impl='ref', **kwargs)
+        G = Generator(impl=impl, **kwargs)
         G.requires_grad_(False)
 
         for var_name, var in tf_state.variables:
@@ -272,7 +272,7 @@ def conv_weight(weight, transposed=False) -> Tensor:
     return w.contiguous()
 
 
-def parse_G_mapping(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, Tensor]]:
+def parse_G_mapping(tf_state: AttributeDict, impl: str) -> Tuple[Dict[str, Any], Dict[str, Tensor]]:
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
 
@@ -292,18 +292,19 @@ def parse_G_mapping(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, 
         norm_latents = kwargs['normalize_latent']
 
     params = dict()
+    fused_bias_act = impl == "cuda_full"
 
     for var_name, var in tf_state.variables:
         if re.match('Dense[0-9]+/[a-zA-Z]*', var_name):
             match = re.search('Dense(\d+)/[a-zA-Z]*', var_name)
             layer_idx = int(match.groups()[0])
             idx = int(norm_latents) + layer_idx * 2
-            torch_pref = f'layers.{idx}'
 
             if var_name.endswith('weight'):
-                params[f'{torch_pref}.weight'] = linear_weight(var)
+                params[f'layers.{idx}.weight'] = linear_weight(var)
             elif var_name.endswith('bias'):
-                params[f'{torch_pref}.bias'] = bias(var)
+                # TODO: how to make a unified state structure?
+                params[f'layers.{idx + int(fused_bias_act)}.bias'] = bias(var)
 
         elif var_name == 'LabelConcat/weight':
             params[f'cat_label.weight'] = linear_weight(var)
@@ -311,7 +312,8 @@ def parse_G_mapping(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, 
     return kwargs, params
 
 
-def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str, Tensor]]:
+def parse_G_synthesis(tf_state, impl):
+    # type: (AttributeDict, str) -> Tuple[Dict[str, Any], Dict[str, Tensor]]
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
 
@@ -340,23 +342,28 @@ def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str
             group_vars_by_res_log2(conv_vars, var_name, var)
     noise_vars = sorted(noise_vars, key=lambda x: x.shape[-1])
 
-    def convert_layer(values, torch_pref, tf_pref, noise=None, up=False):
+    def convert_layer(values, torch_pref, tf_pref, noise=None, up=False, fused_bias_act=False):
         mod_name = f'{torch_pref}.style.'
         params[mod_name + 'weight'] = linear_weight(values[tf_pref + 'mod_weight'])
         params[mod_name + 'bias'] = bias(values[tf_pref + 'mod_bias']) + 1
 
-        conv_name = f'{torch_pref}.conv.'
-        params[conv_name + 'weight'] = conv_weight(values[tf_pref + 'weight'], transposed=up)
-        params[conv_name + 'bias'] = bias(values[tf_pref + 'bias'])
+        params[torch_pref + '.conv.weight'] = conv_weight(values[tf_pref + 'weight'], transposed=up)
+        if fused_bias_act:
+            bias_pref = torch_pref + '.act_fn.'
+        else:
+            bias_pref = torch_pref + '.conv.'
+        params[bias_pref + 'bias'] = bias(values[tf_pref + 'bias'])
 
         if noise is not None:
             noise_name = f'{torch_pref}.add_noise.'
             params[noise_name + 'noise'] = torch.from_numpy(noise)
             params[noise_name + 'gain'] = torch.tensor(values[tf_pref + 'noise_strength'])
 
+    fused_bias_act = impl == "cuda_full"
     early_layers = conv_vars[2]
     params['input.weight'] = torch.from_numpy(early_layers['Const/const'])
-    convert_layer(early_layers, 'main.0', 'Conv/', noise=noise_vars[0])
+    convert_layer(early_layers, 'main.0', 'Conv/', noise=noise_vars[0],
+                  fused_bias_act=fused_bias_act)
     convert_layer(early_layers, 'outs.0', 'ToRGB/')
 
     for i in range(3, max(conv_vars.keys()) + 1):
@@ -364,7 +371,8 @@ def parse_G_synthesis(tf_state: AttributeDict) -> Tuple[Dict[str, Any], Dict[str
         for j, (tf_pref, idx) in enumerate(zip(['Conv0_up/', 'Conv1/'], [idx, idx + 1])):
             convert_layer(conv_vars[i], f'main.{idx}', tf_pref,
                           noise=noise_vars[idx],
-                          up=(j == 0))
+                          up=(j == 0),
+                          fused_bias_act=fused_bias_act)
         convert_layer(conv_vars[i], f'outs.{i - 2}', 'ToRGB/')
 
     return kwargs, params
@@ -383,6 +391,9 @@ def get_arg_parser():
     parser.add_argument('-o', '--output', type=str, nargs='*', default=['.'],
                         help='One or more output file paths. Alternatively a directory path, '
                              'where all models will be saved. Default: current directory')
+    parser.add_argument('-I', '--impl', type=str, default='ref',
+                        choices=['ref', 'cuda', 'cuda_full'],
+                        help='Implementation (there are some differences in param names')
     return parser
 
 
@@ -413,7 +424,7 @@ def main():
         unpickled = [unpickled]
 
     print('Converting tensorflow models and saving them...')
-    converted = [convert_from_tf(tf_state) for tf_state in unpickled]
+    converted = [convert_from_tf(tf_state, args.impl) for tf_state in unpickled]
 
     if len(save_paths) == 1:
         dir_path = save_paths[0]

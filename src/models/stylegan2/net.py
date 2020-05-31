@@ -17,12 +17,10 @@ def is_fused_bias_act(impl: str):
     return impl == "cuda_full"
 
 
-def act_func(name="lrelu", fused_bias_act=False, alpha=None, gain=None, bias=True, bias_dim=None,
-             lr_mult=1.0):
-    # type: (Optional[str], Optional[bool], Optional[float], Optional[float], Optional[bool], Optional[int], Optional[float]) -> nn.Module
+def act_func(name="lrelu", fused_bias_act=False, bias=True, bias_dim=None, lr_mult=1.0):
+    # type: (Optional[str], Optional[bool], Optional[bool], Optional[int], Optional[float]) -> nn.Module
     if fused_bias_act:
-        return FusedBiasActivation(act=name, alpha=alpha, gain=gain, bias=bias, bias_dim=bias_dim,
-                                   lr_mult=lr_mult)
+        return FusedBiasActivation(act=name, bias=bias, bias_dim=bias_dim, lr_mult=lr_mult)
     if name != "lrelu":
         raise NotImplementedError("try cuda_full impl")
     return EqualizedLRLeakyReLU(inplace=True)
@@ -244,7 +242,7 @@ class SynthesisNet(nn.Module):
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
             return int(min(max(fmaps, fmap_min), fmap_max))
 
-        main = [StyledLayer(nf(1), nf(1), style_dim)]
+        main = [StyledLayer(nf(1), nf(1), style_dim, impl=impl)]
         outs = [ToRGB(nf(1), img_channels, style_dim)]
 
         for res in range(1, res_log2 - 1):
