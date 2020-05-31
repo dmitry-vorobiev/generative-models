@@ -79,31 +79,31 @@ class FusedBiasAct(torch.autograd.Function):
             return x
         if spec['cuda_idx'] is None:
             raise NotImplementedError("sorry, bro...")
-        if not spec['zero_2nd_grad']:
-            raise NotImplementedError("sorry, bro...")
 
         kwargs = dict(axis=axis, act=spec['cuda_idx'], alpha=alpha, gain=gain)
         y = fused_bias_act_op.call(x=x, b=b, ref=empty, grad=0, **kwargs)
 
         ref = {'x': x, 'y': y}[spec['ref']]
         ctx.save_for_backward(x, b, ref)
+        ctx.grad2 = not spec['zero_2nd_grad']
         ctx.kwargs = kwargs
         return y
 
     @staticmethod
     def backward(ctx: Any, dy: Tensor):
         x, b, ref = ctx.saved_tensors
-        dx, db = FusedBiasActBackward.apply(dy, x, b, ref, ctx.kwargs)
+        dx, db = FusedBiasActBackward.apply(dy, x, b, ref, ctx.grad2, ctx.kwargs)
         return dx, db, None, None, None, None
 
 
 class FusedBiasActBackward(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, dy, x, b, ref, kwargs):
-        # type: (Any, Tensor, Tensor, Tensor, Tensor, Mapping[str, Any]) -> Tuple[Tensor, Tensor]
-        dx = FusedBiasActBackward._grad_dx(dy, ref, kwargs)
+    def forward(ctx, dy, x, b, ref, grad2, kwargs):
+        # type: (Any, Tensor, Tensor, Tensor, Tensor, bool, Mapping[str, Any]) -> Tuple[Tensor, Tensor]
+        dx = fused_bias_act_op.call(x=dy, b=dy.new_empty([0]), ref=ref, grad=1, **kwargs)
         db = FusedBiasActBackward._grad_db(dx, b, kwargs['axis'])
         ctx.save_for_backward(ref)
+        ctx.grad2 = grad2
         ctx.kwargs = kwargs
         return dx, db
 
@@ -111,11 +111,10 @@ class FusedBiasActBackward(torch.autograd.Function):
     def backward(ctx: Any, d_dx: Tensor, d_db: Tensor):
         ref, = ctx.saved_tensors
         d_dy: Tensor = fused_bias_act_op.call(x=d_dx, b=d_db, ref=ref, grad=1, **ctx.kwargs)
-        return d_dy, None, None, None, None
-
-    @staticmethod
-    def _grad_dx(dy: Tensor, ref: Tensor, kwargs: Mapping[str, Any]) -> Tensor:
-        return fused_bias_act_op.call(x=dy, b=dy.new_empty([0]), ref=ref, grad=1, **kwargs)
+        d_x: Optional[Tensor] = None
+        if ctx.grad2:
+            d_x = fused_bias_act_op.call(x=d_dx, b=d_db, ref=ref, grad=2, **ctx.kwargs)
+        return d_dy, d_x, None, None, None, None
 
     @staticmethod
     def _grad_db(dx: Tensor, b: Tensor, axis: int) -> Tensor:
