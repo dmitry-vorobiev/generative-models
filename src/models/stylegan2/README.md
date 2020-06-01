@@ -38,6 +38,22 @@ To convert pretrained StyleGAN 2 weights from the official TF distribution run t
 python src/convert_stylegan2_tf_weights.py -d ffhq-config-e -o /path/to/local/dir -I cuda
 ```
 
+### Install custom CUDA kernels (optional)
+There are two ways to use custom CUDA kernels from the original TF distribution:
+1. Compile it in advance and install as a python module
+2. Or use JIT compilation powered by [Ninja](https://ninja-build.org/), 
+which doesn't require you to do anything.
+
+To follow the first option run this:
+
+```shell script
+cd src/models/stylegan2/custom_ops
+python setup.py install
+```
+
+Alternatively, you can just run the model using `impl=cuda` or `impl=cuda_full` 
+ and it will compile at runtime.
+
 ## License
 
 Original Nvidia's license is applied for most of the stuff:
