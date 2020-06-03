@@ -18,3 +18,6 @@ DLossFunc = Callable[[G, D, Tensor, Tensor, Optional[Tensor], Optional[FloatDict
 
 TrainFunc = Callable[[int, Batch], FloatDict]
 SampleImages = Callable[[], Tensor]
+
+# inference
+SampleRandomImages = Callable[[G, int, Device], Tensor]

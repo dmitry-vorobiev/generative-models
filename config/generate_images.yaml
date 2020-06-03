@@ -1,0 +1,27 @@
+hydra:
+  run:
+    dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+defaults:
+  - model: stylegan2/config_f
+
+model:
+  G:
+    class: models.stylegan2.net.Generator
+    params:
+      img_res: 1024
+      img_channels: 3
+      num_classes: 0
+      truncation_psi: 0.5
+      truncation_cutoff: null
+      randomize_noise: true
+      impl: cuda
+    weights: /media/dmitry/data/weights/ffhq_cuda/Gs.pth
+
+mode: random
+device: cuda:1
+num_images: 22
+batch_size: 11
+dynamic_range: [-1, 1]
+out_dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}
+file_prefix: ffhq_

@@ -4,6 +4,7 @@ hydra:
   job_logging:
     handlers:
       file:
+        # TODO: support for multiple log files - one for each GPU
         filename: ${hydra.job.name}.log
 
 defaults:
