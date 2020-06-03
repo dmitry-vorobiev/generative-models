@@ -58,6 +58,15 @@ number of classes `model.*.params.num_classes` according to your dataset.
 
 ## Usage
 
+### Generate images
+Only simple image generation pipeline for now (will add more use cases in the future):
+
+```shell script
+python src/generate_images.py model=stylegan2/config_f num_images=100 batch_size=11 \
+  device=cuda:0 model.G.weights=/path/to/model/state_dict
+```
+You can find other settings in `config/generate_images.yaml`.
+
 ### Multi-GPU training
 Launch distributed training on GPUs:
 
