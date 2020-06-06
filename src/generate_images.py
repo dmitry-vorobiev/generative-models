@@ -1,4 +1,5 @@
 import hydra
+import logging
 import os
 import torch
 import torchvision
@@ -8,7 +9,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 from typing import Dict
 
-import models.stylegan2.inference
+import models
 from my_types import SampleRandomImages
 
 
@@ -30,6 +31,7 @@ def make_dir(dir_path: str) -> None:
 
 def load_model(conf: DictConfig, device: torch.device) -> torch.nn.Module:
     G: torch.nn.Module = instantiate(conf).to(device)
+    logging.info("Loading generator weights from {}".format(conf.weights))
     state_dict = torch.load(conf.weights)
     G.load_state_dict(state_dict)
     G.requires_grad_(False)
@@ -41,6 +43,7 @@ def load_model(conf: DictConfig, device: torch.device) -> torch.nn.Module:
 def main(conf: DictConfig):
     out_dir = conf.get('out_dir', os.path.join(os.getcwd(), 'generated_images'))
     make_dir(out_dir)
+    logging.info("Saving images to {}".format(out_dir))
 
     device = torch.device(conf.get('device', 'cpu'))
     G = load_model(conf.model.G, device)
@@ -60,7 +63,7 @@ def main(conf: DictConfig):
             path = os.path.join(out_dir, '%s%06d.png' % (prefix, image_idx))
             torchvision.utils.save_image(image, path, normalize=True, range=dyn_range)
             pbar.update(1)
-        del images, image
+        del image, images
 
     pbar.close()
     print("DONE")
