@@ -5,15 +5,9 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Any, Mapping, Optional, Tuple
 
-try:
-    import fused_bias_act_op
-except ImportError:
-    import os
-    from torch.utils import cpp_extension
-    module_dir = os.path.dirname(__file__)
-    sources = [os.path.join(module_dir, 'fused_bias_act.cpp'),
-               os.path.join(module_dir, 'fused_bias_act.cu')]
-    fused_bias_act_op = cpp_extension.load('fused_bias_act_op', sources)
+from .utils import load_extension
+fused_bias_act_op = load_extension('fused_bias_act_op', ['fused_bias_act.cpp',
+                                                         'fused_bias_act_kernel.cu'])
 
 
 FUNCS = {
@@ -47,16 +41,16 @@ class FusedBiasAct(torch.autograd.Function):
                 The value of `axis` is ignored if `b` is not specified.
         act:    Name of the activation function to evaluate, or `"linear"` to disable.
                 Can be e.g. `"relu"`, `"lrelu"`, `"tanh"`, `"sigmoid"`, `"swish"`, etc.
-                See `activation_funcs` for a full list. `None` is not allowed.
+                See `FUNCS` for a full list. `None` is not allowed.
         alpha:  Shape parameter for the activation function, or `None` to use the default.
         gain:   Scaling factor for the output tensor, or `None` to use default.
-                See `activation_funcs` for the default scaling of each activation function.
+                See `FUNCS` for the default scaling of each activation function.
                 If unsure, consider specifying `1.0`.
 
     Returns:
         Tensor of the same shape and datatype as `x`.
 
-    original:
+    Original:
     https://github.com/NVlabs/stylegan2/blob/master/dnnlib/tflib/ops/fused_bias_act.py
     """
     @staticmethod

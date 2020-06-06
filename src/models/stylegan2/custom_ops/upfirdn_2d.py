@@ -3,6 +3,7 @@ The backprop solution comes from another PyTorch StyleGAN2 implementation:
 https://github.com/rosinality/stylegan2-pytorch/blob/master/op/upfirdn2d.py
 Previous naive port of TF grad function caused the gradient penalty (R1)
 to be orders of magnitude higher, than it should, which significantly crippled training.
+UPD: Turns out I've missed grad2 in the original TF code...
 
 
 MIT License
@@ -33,22 +34,46 @@ import torch
 from torch import Tensor
 from typing import Any, Tuple
 
-try:
-    import upfirdn_2d_op
-except ImportError:
-    import os
-    from torch.utils import cpp_extension
-    module_dir = os.path.dirname(__file__)
-    sources = [os.path.join(module_dir, 'upfirdn_2d.cpp'),
-               os.path.join(module_dir, 'upfirdn_2d_kernel.cu')]
-    upfirdn_2d_op = cpp_extension.load('upfirdn_2d_op', sources)
-
+from .utils import load_extension
+upfirdn_2d_op = load_extension('upfirdn_2d_op', ['upfirdn_2d.cpp', 'upfirdn_2d_kernel.cu'])
 
 Tuple2Int = Tuple[int, int]
 Tuple4Int = Tuple[int, int, int, int]
 
 
 class UpFirDn2D(torch.autograd.Function):
+    r"""Pad, upsample, FIR filter, and downsample a batch of 2D images.
+    Accepts a batch of 2D images of the shape `[batch_dim, channels, inH, inW]`
+    and performs the following operations for each image, batched across
+    `batch_dim` and `channels`:
+
+    1. Pad the image with zeros by the specified number of pixels on each side
+       (`pad`). Specifying a negative value corresponds to cropping the image.
+    2. Upsample the image by inserting the zeros after each pixel (`up`).
+    3. Convolve the image with the specified 2D FIR filter (`kernel`), shrinking the
+       image so that the footprint of all output pixels lies within the input image.
+    4. Downsample the image by throwing away pixels (`down`).
+
+    This sequence of operations bears close resemblance to scipy.signal.upfirdn().
+    The fused op is considerably more efficient than performing the same calculation
+    using standard TensorFlow ops. It supports gradients of arbitrary order.
+
+    Args:
+        x:      Input tensor of the shape `[batch_dim, channels, outH, outW]`.
+        kernel: 2D FIR filter of the shape `[firH, firW]`.
+        up:     Tuple of two integers, representing upsampling factors along the X- and Y-axises.
+                Default: (1, 1).
+        down:   Tuple of two integers, representing downsampling factors along the X- and Y-axises.
+                Default: (1, 1).
+        pad:    Tuple of four integers, representing the number of pixels to pad on the
+                (left, right, top, bottom) sides. Default: (0, 0, 0, 0)..
+
+    Returns:
+        Tensor of the shape `[batch_dim, channels, outH, outW]`, and same datatype as `x`.
+
+    Original:
+    https://github.com/NVlabs/stylegan2/blob/master/dnnlib/tflib/ops/upfirdn_2d.py
+    """
     @staticmethod
     def forward(ctx, x, kernel, up, down, pad):
         # type: (Any, Tensor, Tensor, Tuple2Int, Tuple2Int, Tuple4Int) -> Tensor
