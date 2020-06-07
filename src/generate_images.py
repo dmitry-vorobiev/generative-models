@@ -8,6 +8,7 @@ import torchvision
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from tqdm import tqdm
+from torchvision.utils import save_image
 from typing import Dict
 
 import models
@@ -59,15 +60,46 @@ def main(conf: DictConfig):
     dyn_range = tuple(conf.out.dynamic_range)
     prefix = conf.out.prefix
     pbar = tqdm(desc="Generating images ({})".format(mode), total=num_images, unit=' img')
+    cols, rows = conf.out.cols, conf.out.rows
+    sheet_size = cols * rows
+    cpu = torch.device('cpu')
 
+    def save(images, start_idx, end_idx):
+        if len(images) > 1:
+            file = '{}{:06d}_{:06d}.png'.format(prefix, start_idx, end_idx)
+        else:
+            file = '{}{:06d}.png'.format(prefix, start_idx)
+        path = os.path.join(out_dir, file)
+        save_image(images, path, nrow=cols, normalize=True, range=dyn_range)
+        pbar.update(len(images))
+
+    prev_images = None
     for i_batch in range(0, num_images, bs):
         images = sample_func(G, bs, device)
-        for i_img, image in enumerate(images):
-            image_idx = i_batch + i_img
-            path = os.path.join(out_dir, '%s%06d.png' % (prefix, image_idx))
-            torchvision.utils.save_image(image, path, normalize=True, range=dyn_range)
-            pbar.update(1)
-        del image, images
+
+        if prev_images is not None:
+            images = images.to(cpu)
+            images = torch.cat([prev_images, images], dim=0)
+            prev_images = None
+
+        n = len(images)
+        if n % sheet_size:
+            n = n // sheet_size * sheet_size
+            prev_images = images[n:].to(cpu)
+            images = images[:n].to(cpu)
+
+        for i in range(0, n, sheet_size):
+            images_sheet = images[i: i + sheet_size]
+            i_start = i + i_batch
+            i_end = i_start + len(images_sheet)
+            save(images_sheet, i_start, i_end)
+            del images_sheet
+        del images
+
+    if prev_images is not None:
+        i_start = num_images // sheet_size * sheet_size
+        i_end = i_start + len(prev_images)
+        save(prev_images, i_start, i_end)
 
     pbar.close()
     print("DONE")

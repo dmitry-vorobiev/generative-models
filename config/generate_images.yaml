@@ -30,3 +30,5 @@ out:
   prefix: ffhq_
   # expected model output range. Will be used to de-normalize images into pixel range [0 ... 255]
   dynamic_range: [-1, 1]
+  cols: 8
+  rows: 2
