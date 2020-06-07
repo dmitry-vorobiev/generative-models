@@ -73,6 +73,7 @@ def main(conf: DictConfig):
         save_image(images, path, nrow=cols, normalize=True, range=dyn_range)
         pbar.update(len(images))
 
+    i_start = 0
     prev_images = None
     for i_batch in range(0, num_images, bs):
         images = sample_func(G, bs, device)
@@ -90,14 +91,13 @@ def main(conf: DictConfig):
 
         for i in range(0, n, sheet_size):
             images_sheet = images[i: i + sheet_size]
-            i_start = i + i_batch
             i_end = i_start + len(images_sheet)
             save(images_sheet, i_start, i_end)
+            i_start = i_end
             del images_sheet
         del images
 
     if prev_images is not None:
-        i_start = num_images // sheet_size * sheet_size
         i_end = i_start + len(prev_images)
         save(prev_images, i_start, i_end)
 
