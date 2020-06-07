@@ -62,8 +62,10 @@ number of classes `model.*.params.num_classes` according to your dataset.
 Only simple image generation pipeline for now (will add more use cases in the future):
 
 ```shell script
-python src/generate_images.py model=stylegan2/config_f num_images=100 batch_size=11 \
-  device=cuda:0 model.G.weights=/path/to/model/state_dict
+python src/generate_images.py model=stylegan2/config_f sample.num_images=100 \
+  sample.batch_size=22 \
+  model.G.weights=/path/to/model/state_dict \
+  out.dir=/path/to/save/dir
 ```
 You can find other settings in `config/generate_images.yaml`.
 
