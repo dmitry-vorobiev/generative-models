@@ -15,13 +15,18 @@ model:
       truncation_psi: 0.5
       truncation_cutoff: null
       randomize_noise: true
-      impl: cuda
-    weights: /media/dmitry/data/weights/ffhq_cuda/Gs.pth
+      impl: cuda_full
+    weights: /media/dmitry/data/weights/ffhq_cuda_full/Gs.pth
 
-mode: random
-device: cuda:1
-num_images: 22
-batch_size: 11
-dynamic_range: [-1, 1]
-out_dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}
-file_prefix: ffhq_
+sample:
+  mode: random
+  num_images: 22
+  batch_size: 22
+  device: cuda
+
+out:
+  dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  # prefix to be added to each file name
+  prefix: ffhq_
+  # expected model output range. Will be used to de-normalize images into pixel range [0 ... 255]
+  dynamic_range: [-1, 1]

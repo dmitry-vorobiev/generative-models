@@ -1,5 +1,6 @@
 import hydra
 import logging
+import math
 import os
 import torch
 import torchvision
@@ -41,25 +42,28 @@ def load_model(conf: DictConfig, device: torch.device) -> torch.nn.Module:
 
 @hydra.main(config_path="../config/generate_images.yaml")
 def main(conf: DictConfig):
-    out_dir = conf.get('out_dir', os.path.join(os.getcwd(), 'generated_images'))
+    out_dir = conf.out.get('dir', os.path.join(os.getcwd(), 'generated_images'))
     make_dir(out_dir)
     logging.info("Saving images to {}".format(out_dir))
 
-    device = torch.device(conf.get('device', 'cpu'))
+    device = torch.device(conf.sample.get('device', 'cpu'))
     G = load_model(conf.model.G, device)
 
-    sample_func = sample_funcs[conf.mode][conf.model.G['class']]
-    bs = conf.batch_size
-    dyn_range = tuple(conf.dynamic_range)
-    prefix = conf.file_prefix
-    pbar = tqdm(desc="Generating images ({})".format(conf.mode), total=conf.num_images,
-                unit=' img')
+    mode = conf.sample.mode
+    sample_func = sample_funcs[mode][conf.model.G['class']]
 
-    for i_batch in range(0, conf.num_images, bs):
+    num_images = conf.sample.num_images
+    bs = min(conf.sample.batch_size, num_images)
+    num_images = math.ceil(num_images / bs) * bs
+
+    dyn_range = tuple(conf.out.dynamic_range)
+    prefix = conf.out.prefix
+    pbar = tqdm(desc="Generating images ({})".format(mode), total=num_images, unit=' img')
+
+    for i_batch in range(0, num_images, bs):
         images = sample_func(G, bs, device)
-
         for i_img, image in enumerate(images):
-            image_idx = i_batch * bs + i_img
+            image_idx = i_batch + i_img
             path = os.path.join(out_dir, '%s%06d.png' % (prefix, image_idx))
             torchvision.utils.save_image(image, path, normalize=True, range=dyn_range)
             pbar.update(1)
