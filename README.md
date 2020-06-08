@@ -59,14 +59,28 @@ number of classes `model.*.params.num_classes` according to your dataset.
 ## Usage
 
 ### Generate images
-Only simple image generation pipeline for now (will add more use cases in the future):
+
+#### Random images
+
+Use `sample.mode=random` for this task:
 
 ```shell script
-python src/generate_images.py model=stylegan2/config_f sample.num_images=100 \
-  sample.batch_size=22 \
+python src/generate_images.py model=stylegan2/config_f sample.mode=random sample.num_images=100 \
   model.G.weights=/path/to/model/state_dict \
   out.dir=/path/to/save/dir
 ```
+
+#### Style mixing
+
+Change `sample.mode` to `style-mixing`. Use `out.cols` and `out.rows` to specify the number of images (subject to change).
+
+```shell script
+python src/generate_images.py model=stylegan2/config_f sample.mode='style-mixing' sample.num_images=100 \
+  out.cols=8 out.rows=3 \
+  model.G.weights=/path/to/model/state_dict \
+  out.dir=/path/to/save/dir
+```
+
 You can find other settings in `config/generate_images.yaml`.
 
 ### Multi-GPU training

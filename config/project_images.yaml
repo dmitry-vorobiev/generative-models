@@ -1,0 +1,22 @@
+hydra:
+  run:
+    dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+defaults:
+  - model: stylegan2/config_f
+
+model:
+  G:
+    class: models.stylegan2.net.Generator
+    params:
+      img_res: 1024
+      img_channels: 3
+      num_classes: 0
+      truncation_psi: 0.5
+      truncation_cutoff: null
+      randomize_noise: true
+      impl: cuda
+    weights: /media/dmitry/data/weights/ffhq_cuda/Gs.pth
+
+device: cuda:1
+batch_size: 11

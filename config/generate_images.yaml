@@ -19,6 +19,7 @@ model:
     weights: /media/dmitry/data/weights/ffhq_cuda_full/Gs.pth
 
 sample:
+  # Available modes: random | style-mixing
   mode: random
   num_images: 22
   batch_size: 22
@@ -29,7 +30,7 @@ out:
   # prefix to be added to each file name
   prefix: ffhq_
   # expected model output range. Will be used to de-normalize images into pixel range [0 ... 255]
-  dynamic_range: [-1, 1]
+  range: [-1, 1]
   # max number of columns in image grid
   cols: 1
   # max number of rows in image grid. Use cols=1, rows=1 to save each image in a single file.

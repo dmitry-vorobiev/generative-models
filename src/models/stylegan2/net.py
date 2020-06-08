@@ -231,12 +231,12 @@ class SynthesisNet(nn.Module):
             p = weight_blur.size(-1) - up
             self.pad0 = (p + 1) // 2 + up - 1
             self.pad1 = p // 2
-            self._upsample = getattr(self, "_upsample_" + impl)
         else:
             self.weight_blur = None
 
         self._upsample = getattr(self, "_upsample_" + impl)
         self.res_log2 = res_log2
+        self.randomize_noise = randomize_noise
 
         def nf(stage: int) -> int:
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
