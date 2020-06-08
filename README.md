@@ -62,7 +62,8 @@ number of classes `model.*.params.num_classes` according to your dataset.
 
 #### Random images
 
-Use `sample.mode=random` for this task:
+Use `sample.mode=random`. `out.cols` and `out.rows` can be used to save images
+in a single file. If both set to 1, each image will be saved in it's own file.
 
 ```shell script
 python src/generate_images.py model=stylegan2/config_f sample.mode=random sample.num_images=100 \
@@ -72,10 +73,13 @@ python src/generate_images.py model=stylegan2/config_f sample.mode=random sample
 
 #### Style mixing
 
-Change `sample.mode` to `style-mixing`. Use `out.cols` and `out.rows` to specify the number of images (subject to change).
+Change `sample.mode` to `style-mixing`. 
+Use `out.cols` and `out.rows` to specify the number of images to mix.
+This will produce an image grid of size *rows* x *cols*.
+ `sample.num_images` setting will be ignored (subject to change).
 
 ```shell script
-python src/generate_images.py model=stylegan2/config_f sample.mode='style-mixing' sample.num_images=100 \
+python src/generate_images.py model=stylegan2/config_f sample.mode='style-mixing' \
   out.cols=8 out.rows=3 \
   model.G.weights=/path/to/model/state_dict \
   out.dir=/path/to/save/dir
