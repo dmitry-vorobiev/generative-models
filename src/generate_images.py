@@ -12,7 +12,8 @@ from torchvision.utils import save_image
 from typing import Dict
 
 import models
-from my_types import SampleRandomImages
+from my_types import SampleRandomImages, TensorGrid
+from utils.config import read_int_list
 
 
 rnd_sample_funcs: Dict[str, SampleRandomImages] = {
@@ -112,8 +113,8 @@ def gen_style_mixed_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, d
     prefix = conf.out.prefix
     cols, rows = conf.out.cols, conf.out.rows
 
-    if cols < 2 or rows * cols < 2:
-        raise AttributeError("Image grid ({}, {}) should be larger".format(rows, cols))
+    if rows * cols < 2:
+        raise AttributeError("Image grid ({}, {}) should have multiple entries".format(rows, cols))
 
     mix_funcs = {
         'models.stylegan2.net.Generator': models.stylegan2.inference.mix_styles
@@ -126,15 +127,33 @@ def gen_style_mixed_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, d
     def gen_random_seeds(n):
         return list(torch.randint(int(2e+10), [n]))
 
-    images = mix_func(G, bs, device=device,
-                      row_seeds=gen_random_seeds(rows),
-                      col_seeds=gen_random_seeds(cols),
-                      style_layers=list(range(6)))
+    options = conf.style_mixing
+    row_seeds = options.get('row_seeds', gen_random_seeds(rows))
+    col_seeds = options.get('col_seeds', gen_random_seeds(cols))
+    style_layers = read_int_list(options, 'style_layers')
+    logging.info("Using {} layers for style mixing".format(", ".join(map(str, style_layers))))
 
-    file = '{}{}x{}.png'.format(prefix, rows, cols)
-    path = os.path.join(out_dir, file)
-    num_cols = getattr(images, 'cols') or cols
-    save_image(images, path, nrow=num_cols, normalize=True, range=dynamic_range)
+    image_dict: TensorGrid = mix_func(G, bs, device=device,
+                                      row_seeds=row_seeds,
+                                      col_seeds=col_seeds,
+                                      style_layers=style_layers)
+
+    # placing original row images
+    empty = torch.ones_like(image_dict[(row_seeds[0], col_seeds[0])])
+    images = [empty] + [image_dict[(s, s)] for s in col_seeds]
+
+    for row_seed in row_seeds:
+        # adding original column image at the beginning of each row
+        image = image_dict[(row_seed, row_seed)]
+        images.append(image)
+
+        for col_seed in col_seeds:
+            image = image_dict[(row_seed, col_seed)]
+            images.append(image)
+
+    path = os.path.join(out_dir, '{}{}x{}.png'.format(prefix, rows, cols))
+    images = torch.cat(images, dim=0)
+    save_image(images, path, nrow=cols + 1, normalize=True, range=dynamic_range)
 
 
 @hydra.main(config_path="../config/generate_images.yaml")

@@ -7,6 +7,7 @@ Device = Optional[torch.device]
 
 FloatDict = Dict[str, float]
 TensorMap = Mapping[str, Tensor]
+TensorGrid = Dict[Tuple[int, int], Tensor]
 
 G = torch.nn.Module
 D = torch.nn.Module

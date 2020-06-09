@@ -21,9 +21,19 @@ model:
 sample:
   # Available modes: random | style-mixing
   mode: random
+  # Num images to sample. Used only in `random` mode
   num_images: 22
   batch_size: 22
   device: cuda
+
+style_mixing:
+  # A list of seeds to sample row images deterministically. If specified, the number of row images
+  # will be equal to the number of seeds (will ignore out.rows). null - use random seeds.
+  row_seeds: null
+  # Same as above, but for column images
+  col_seeds: null
+  # List of layers to use for mixing
+  style_layers: 0 - 6
 
 out:
   dir: /media/dmitry/data/kek/${now:%Y-%m-%d}/${now:%H-%M-%S}

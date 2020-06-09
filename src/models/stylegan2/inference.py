@@ -1,9 +1,11 @@
 import torch
 from torch import Tensor
+from tqdm import tqdm
 from typing import List
 
 from .net import Generator
 from .train import sample_latent, sample_rand_label
+from my_types import TensorGrid
 
 
 def sample_random_images(G: Generator, batch_size: int, device=None):
@@ -26,12 +28,14 @@ def sample_latent_determinist(seeds: List[int], latent_dim: int, device=None) ->
     return torch.cat(all_z, dim=0)
 
 
-def mix_styles(G: Generator, batch_size: int, device=None, row_seeds=None, col_seeds=None,
-               style_layers=None) -> Tensor:
-    from tqdm import tqdm
+def mix_styles(G: Generator, batch_size: int, device=None, **kwargs) -> TensorGrid:
+    row_seeds = kwargs['row_seeds']
+    col_seeds = kwargs['col_seeds']
+    style_layers = kwargs['style_layers']
 
-    if style_layers is None:
-        style_layers = list(range(6))
+    assert isinstance(row_seeds, list) and len(row_seeds) > 0
+    assert isinstance(col_seeds, list) and len(col_seeds) > 0
+    assert isinstance(style_layers, list) and len(style_layers) > 0
 
     cpu = torch.device('cpu')
 
@@ -67,21 +71,4 @@ def mix_styles(G: Generator, batch_size: int, device=None, row_seeds=None, col_s
             pbar.update(1)
 
     pbar.close()
-
-    key = (col_seeds[0], col_seeds[0])
-    empty = torch.zeros_like(image_dict[key])
-
-    # placing original row images
-    images_out = [empty] + [image_dict[(s, s)] for s in col_seeds]
-    for row_seed in row_seeds:
-        # adding original column image at the beginning of each row
-        image = image_dict[(row_seed, row_seed)]
-        images_out.append(image)
-
-        for col_seed in col_seeds:
-            image = image_dict[(row_seed, col_seed)]
-            images_out.append(image)
-
-    images_out = torch.cat(images_out, dim=0)
-    images_out.cols = len(col_seeds) + 1
-    return images_out
+    return image_dict
