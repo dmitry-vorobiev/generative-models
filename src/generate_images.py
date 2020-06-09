@@ -16,20 +16,6 @@ from my_types import SampleRandomImages, TensorGrid
 from utils.config import read_int_list
 
 
-rnd_sample_funcs: Dict[str, SampleRandomImages] = {
-    'models.stylegan2.net.Generator': models.stylegan2.inference.sample_random_images
-}
-
-style_mixing_funcs = {
-    'models.stylegan2.net.Generator': models.stylegan2.inference.mix_styles
-}
-
-sample_funcs = {
-    'random': rnd_sample_funcs,
-    'style-mixing': style_mixing_funcs
-}
-
-
 def make_dir(dir_path: str) -> None:
     if os.path.isfile(dir_path) or os.path.splitext(dir_path)[-1]:
         raise AttributeError('{} is not a directory.'.format(dir_path))
@@ -108,14 +94,6 @@ def gen_random_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, device
 
 
 def gen_style_mixed_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, device=None):
-    bs = conf.sample.batch_size
-    dynamic_range = tuple(conf.out.range)
-    prefix = conf.out.prefix
-    cols, rows = conf.out.cols, conf.out.rows
-
-    if rows * cols < 2:
-        raise AttributeError("Image grid ({}, {}) should have multiple entries".format(rows, cols))
-
     mix_funcs = {
         'models.stylegan2.net.Generator': models.stylegan2.inference.mix_styles
     }
@@ -128,12 +106,17 @@ def gen_style_mixed_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, d
         return list(torch.randint(int(2e+10), [n]))
 
     options = conf.style_mixing
-    row_seeds = options.get('row_seeds', gen_random_seeds(rows))
-    col_seeds = options.get('col_seeds', gen_random_seeds(cols))
+    row_seeds = options.get('row_seeds', gen_random_seeds(conf.out.rows))
+    col_seeds = options.get('col_seeds', gen_random_seeds(conf.out.cols))
+    rows, cols = len(row_seeds), len(col_seeds)
+
+    if rows * cols < 2:
+        raise AttributeError("Image grid ({}, {}) should have multiple entries".format(rows, cols))
+
     style_layers = read_int_list(options, 'style_layers')
     logging.info("Using {} layers for style mixing".format(", ".join(map(str, style_layers))))
 
-    image_dict: TensorGrid = mix_func(G, bs, device=device,
+    image_dict: TensorGrid = mix_func(G, conf.sample.batch_size, device=device,
                                       row_seeds=row_seeds,
                                       col_seeds=col_seeds,
                                       style_layers=style_layers)
@@ -151,9 +134,9 @@ def gen_style_mixed_images(G: torch.nn.Module, out_dir: str, conf: DictConfig, d
             image = image_dict[(row_seed, col_seed)]
             images.append(image)
 
-    path = os.path.join(out_dir, '{}{}x{}.png'.format(prefix, rows, cols))
+    path = os.path.join(out_dir, '{}{}x{}.png'.format(conf.out.prefix, rows, cols))
     images = torch.cat(images, dim=0)
-    save_image(images, path, nrow=cols + 1, normalize=True, range=dynamic_range)
+    save_image(images, path, nrow=cols + 1, normalize=True, range=tuple(conf.out.range))
 
 
 @hydra.main(config_path="../config/generate_images.yaml")
