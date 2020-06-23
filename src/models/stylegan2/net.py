@@ -242,7 +242,8 @@ class SynthesisNet(nn.Module):
             fmaps = fmap_base / (2.0 ** (stage * fmap_decay))
             return int(min(max(fmaps, fmap_min), fmap_max))
 
-        main = [StyledLayer(nf(1), nf(1), style_dim, impl=impl)]
+        noise0 = None if randomize_noise else torch.randn(1, 1, 4, 4)
+        main = [StyledLayer(nf(1), nf(1), style_dim, impl=impl, noise=noise0)]
         outs = [ToRGB(nf(1), img_channels, style_dim)]
 
         for res in range(1, res_log2 - 1):

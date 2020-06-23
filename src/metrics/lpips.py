@@ -54,7 +54,7 @@ class ImageNorm(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return (x - self.mean) / self.std
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         return "mean={}, std={}".format(*map(pretty_print, [self.mean, self.std]))
 
 
