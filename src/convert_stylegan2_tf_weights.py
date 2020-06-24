@@ -145,7 +145,7 @@ def convert_kwargs(static_kwargs, mappings):
     return kwargs
 
 
-def convert_from_tf(tf_state, impl: str) -> torch.nn.Module:
+def convert_from_tf(tf_state, impl: str, randomize_noise: bool) -> torch.nn.Module:
     tf_state = AttributeDict.convert_dict_recursive(tf_state)
     model_type = tf_state['build_func_name']
     error_if_unsupported(model_type)
@@ -166,7 +166,7 @@ def convert_from_tf(tf_state, impl: str) -> torch.nn.Module:
         kwargs_synthesis, params_synthesis = parse_G_synthesis(tf_state.components.synthesis, impl)
         kwargs.update(kwargs_synthesis)
 
-        G = Generator(impl=impl, **kwargs)
+        G = Generator(impl=impl, randomize_noise=randomize_noise, **kwargs)
         G.requires_grad_(False)
 
         for var_name, var in tf_state.variables:
@@ -394,6 +394,9 @@ def get_arg_parser():
     parser.add_argument('-I', '--impl', type=str, default='ref',
                         choices=['ref', 'cuda', 'cuda_full'],
                         help='Implementation (there are some differences in param names')
+    parser.add_argument('-n', '--noise', type=str, default='random',
+                        choices=['const', 'random'],
+                        help='Which noise layers to use')
     return parser
 
 
@@ -402,6 +405,7 @@ def main():
     input_path = args.input
     model_name = args.download
     save_paths = args.output
+    random_noise = args.noise == 'random'
 
     if not any([input_path, model_name]):
         raise AttributeError(
@@ -424,7 +428,7 @@ def main():
         unpickled = [unpickled]
 
     print('Converting tensorflow models and saving them...')
-    converted = [convert_from_tf(tf_state, args.impl) for tf_state in unpickled]
+    converted = [convert_from_tf(tf_state, args.impl, random_noise) for tf_state in unpickled]
 
     if len(save_paths) == 1:
         dir_path = save_paths[0]
